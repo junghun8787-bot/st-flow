@@ -1242,11 +1242,40 @@ if (window.speechSynthesis) {
 }
 
 function playAlarmTTS(studentName) {
-    window.speechSynthesis.cancel(); // 초기화
-    var msg = new SpeechSynthesisUtterance(studentName + " 학생, 수업 종료입니다.");
-    msg.lang = 'ko-KR';
-    msg.volume = 1.0; // 최대 볼륨
-    window.speechSynthesis.speak(msg);
+    return new Promise(resolve => {
+        const voiceType = document.getElementById("ttsVoiceSelect").value;
+        if (voiceType === "0") return resolve();
+
+        // 1. 이전 음성 즉시 중단 및 초기화
+        window.speechSynthesis.cancel(); 
+
+        const u = new SpeechSynthesisUtterance();
+        u.volume = ttsVolume;
+        u.rate = 1.0; // 속도 (1.0이 표준)
+        u.pitch = 1.0; // 음높이
+
+        // 2. 음성 모드 설정
+        if (voiceType === "1") {
+            u.text = studentName + "님, 수업이 종료되었습니다. 수고하셨습니다.";
+            u.lang = 'ko-KR';
+        } else {
+            u.text = studentName + ", Great job! It's time to go home.";
+            u.lang = 'en-US';
+        }
+
+        // 3. 아이패드 고품질 목소리(Siri/Natural) 우선 매칭
+        const voices = window.speechSynthesis.getVoices();
+        const premiumVoice = voices.find(v => v.lang.includes(u.lang) && (v.name.includes('Siri') || v.name.includes('Natural') || v.name.includes('Enhanced')))
+                           || voices.find(v => v.lang.includes(u.lang));
+
+        if (premiumVoice) u.voice = premiumVoice;
+
+        u.onend = resolve;
+        u.onerror = resolve;
+
+        // 4. 재생
+        window.speechSynthesis.speak(u);
+    });
 }
 
 function playMelody(type) {
