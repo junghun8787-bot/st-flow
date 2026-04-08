@@ -1246,48 +1246,50 @@ function playAlarmTTS(studentName) {
         const voiceType = document.getElementById("ttsVoiceSelect").value;
         if (voiceType === "0" || !window.speechSynthesis) return resolve();
 
-        // 1. 기존 음성 즉시 중지
-        window.speechSynthesis.cancel();
+        window.speechSynthesis.cancel(); // 이전 음성 즉시 제거
 
         const voices = window.speechSynthesis.getVoices();
         
-        // 2. 메시지 구성
-        let msgText = "";
-        if (voiceType === "1") {
-            msgText = `${studentName}! ${studentName}!`;
-        } else if (voiceType === "2") {
-            // 한국어 이름 읽고 잠시 쉬었다가 원어민 영어 출력
-            msgText = `${studentName}. Let's go home!`;
-        }
+        // 고품질 목소리 필터링 (아이패드 Siri/Natural/Premium)
+        const koVoice = voices.find(v => v.lang.includes('ko') && (v.name.includes('Siri') || v.name.includes('Premium'))) || voices.find(v => v.lang.includes('ko'));
+        const enVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Siri') || v.name.includes('Natural'))) || voices.find(v => v.lang.includes('en'));
 
-        const u = new SpeechSynthesisUtterance(msgText);
-        u.volume = ttsVolume;
-        u.rate = 0.9;  // 발음을 더 명확하게 하기 위해 살짝 느리게 설정
-        u.pitch = 1.0;
-
-        // 3. 목소리 매칭 로직 (아이패드 Siri/Premium 우선)
         if (voiceType === "1") {
+            // [옵션 1] 한국어 이름 두 번 (고품질 한국어 엔진)
+            const u = new SpeechSynthesisUtterance(`${studentName}! ${studentName}!`);
             u.lang = 'ko-KR';
-            // 한국어 Siri 또는 프리미엄 음성 찾기
-            u.voice = voices.find(v => v.lang.includes('ko') && (v.name.includes('Siri') || v.name.includes('Premium') || v.name.includes('최적화'))) 
-                    || voices.find(v => v.lang.includes('ko'));
-        } else if (voiceType === "2") {
-            // 영어 부분 발음을 위해 기본 언어를 영어로 설정하고 이름은 한국어 엔진이 알아서 처리
-            u.lang = 'en-US'; 
-            // 원어민(Siri 또는 Natural) 영어 목소리 찾기
-            u.voice = voices.find(v => v.lang.includes('en') && (v.name.includes('Siri') || v.name.includes('Natural') || v.name.includes('Samantha'))) 
-                    || voices.find(v => v.lang.includes('en'));
-        }
-
-        u.onend = resolve;
-        u.onerror = resolve;
-
-        // 4. 아이패드 사파리에서는 약간의 지연 후 재생해야 안정적임
-        setTimeout(() => {
+            u.voice = koVoice;
+            u.volume = ttsVolume;
+            u.rate = 1.0;
+            u.onend = resolve;
             window.speechSynthesis.speak(u);
-        }, 100);
+        } 
+        else if (voiceType === "2") {
+            // [옵션 2] 한국어 이름 읽고 나서 영어 원어민 음성 릴레이
+            // 1단계: 한국어 이름 출력
+            const uKo = new SpeechSynthesisUtterance(studentName);
+            uKo.lang = 'ko-KR';
+            uKo.voice = koVoice;
+            uKo.volume = ttsVolume;
+            uKo.rate = 1.0;
+
+            uKo.onend = () => {
+                // 2단계: 한국어 이름 종료 후 영어 원어민 음성 출력 (dot 방지)
+                setTimeout(() => {
+                    const uEn = new SpeechSynthesisUtterance("Great job! Let's go home.");
+                    uEn.lang = 'en-US';
+                    uEn.voice = enVoice;
+                    uEn.volume = ttsVolume;
+                    uEn.rate = 0.9; // 외국인 발음을 더 우아하게
+                    uEn.onend = resolve;
+                    window.speechSynthesis.speak(uEn);
+                }, 200);
+            };
+            window.speechSynthesis.speak(uKo);
+        }
     });
 }
+   
 function playMelody(type) {
     return new Promise(resolve => {
         initAudio();
