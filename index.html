@@ -1242,40 +1242,11 @@ if (window.speechSynthesis) {
 }
 
 function playAlarmTTS(studentName) {
-    return new Promise(resolve => {
-        const voiceType = document.getElementById("ttsVoiceSelect").value;
-        if (voiceType === "0" || !window.speechSynthesis) return resolve();
-        
-        // 1. 기존에 밀려있는 음성 모두 강제 취소 (아이패드 필수)
-        window.speechSynthesis.cancel(); 
-
-        let voices = window.speechSynthesis.getVoices();
-        let u = new SpeechSynthesisUtterance();
-        u.volume = ttsVolume;
-        u.rate = 1.0;
-        u.pitch = 1.0;
-
-        // 2. 음성 텍스트 구성
-        if (voiceType === "1") {
-            u.text = `${studentName}! ${studentName}!`;
-            u.lang = 'ko-KR';
-        } else {
-            u.text = `${studentName}! Let's go home!`;
-            u.lang = 'en-US';
-        }
-
-        // 3. 아이패드 내장 목소리 매칭 (Siri 또는 기본값 우선)
-        let targetVoice = voices.find(v => v.lang.includes(u.lang) && (v.name.includes('Siri') || v.name.includes('Natural'))) 
-                         || voices.find(v => v.lang.includes(u.lang));
-        
-        if (targetVoice) u.voice = targetVoice;
-
-        u.onend = resolve;
-        u.onerror = resolve;
-
-        // 4. 실행
-        window.speechSynthesis.speak(u);
-    });
+    window.speechSynthesis.cancel(); // 초기화
+    var msg = new SpeechSynthesisUtterance(studentName + " 학생, 수업 종료입니다.");
+    msg.lang = 'ko-KR';
+    msg.volume = 1.0; // 최대 볼륨
+    window.speechSynthesis.speak(msg);
 }
 
 function playMelody(type) {
