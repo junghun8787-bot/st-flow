@@ -1244,40 +1244,50 @@ if (window.speechSynthesis) {
 function playAlarmTTS(studentName) {
     return new Promise(resolve => {
         const voiceType = document.getElementById("ttsVoiceSelect").value;
-        if (voiceType === "0") return resolve();
+        if (voiceType === "0" || !window.speechSynthesis) return resolve();
 
-        // 1. 이전 음성 즉시 중단 및 초기화
-        window.speechSynthesis.cancel(); 
+        // 1. 기존 음성 즉시 중지
+        window.speechSynthesis.cancel();
 
-        const u = new SpeechSynthesisUtterance();
-        u.volume = ttsVolume;
-        u.rate = 1.0; // 속도 (1.0이 표준)
-        u.pitch = 1.0; // 음높이
-
-        // 2. 음성 모드 설정
+        const voices = window.speechSynthesis.getVoices();
+        
+        // 2. 메시지 구성
+        let msgText = "";
         if (voiceType === "1") {
-            u.text = studentName + "님, 수업이 종료되었습니다. 수고하셨습니다.";
-            u.lang = 'ko-KR';
-        } else {
-            u.text = studentName + ", Great job! It's time to go home.";
-            u.lang = 'en-US';
+            msgText = `${studentName}! ${studentName}!`;
+        } else if (voiceType === "2") {
+            // 한국어 이름 읽고 잠시 쉬었다가 원어민 영어 출력
+            msgText = `${studentName}. Let's go home!`;
         }
 
-        // 3. 아이패드 고품질 목소리(Siri/Natural) 우선 매칭
-        const voices = window.speechSynthesis.getVoices();
-        const premiumVoice = voices.find(v => v.lang.includes(u.lang) && (v.name.includes('Siri') || v.name.includes('Natural') || v.name.includes('Enhanced')))
-                           || voices.find(v => v.lang.includes(u.lang));
+        const u = new SpeechSynthesisUtterance(msgText);
+        u.volume = ttsVolume;
+        u.rate = 0.9;  // 발음을 더 명확하게 하기 위해 살짝 느리게 설정
+        u.pitch = 1.0;
 
-        if (premiumVoice) u.voice = premiumVoice;
+        // 3. 목소리 매칭 로직 (아이패드 Siri/Premium 우선)
+        if (voiceType === "1") {
+            u.lang = 'ko-KR';
+            // 한국어 Siri 또는 프리미엄 음성 찾기
+            u.voice = voices.find(v => v.lang.includes('ko') && (v.name.includes('Siri') || v.name.includes('Premium') || v.name.includes('최적화'))) 
+                    || voices.find(v => v.lang.includes('ko'));
+        } else if (voiceType === "2") {
+            // 영어 부분 발음을 위해 기본 언어를 영어로 설정하고 이름은 한국어 엔진이 알아서 처리
+            u.lang = 'en-US'; 
+            // 원어민(Siri 또는 Natural) 영어 목소리 찾기
+            u.voice = voices.find(v => v.lang.includes('en') && (v.name.includes('Siri') || v.name.includes('Natural') || v.name.includes('Samantha'))) 
+                    || voices.find(v => v.lang.includes('en'));
+        }
 
         u.onend = resolve;
         u.onerror = resolve;
 
-        // 4. 재생
-        window.speechSynthesis.speak(u);
+        // 4. 아이패드 사파리에서는 약간의 지연 후 재생해야 안정적임
+        setTimeout(() => {
+            window.speechSynthesis.speak(u);
+        }, 100);
     });
 }
-
 function playMelody(type) {
     return new Promise(resolve => {
         initAudio();
