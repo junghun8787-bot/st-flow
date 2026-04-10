@@ -1002,7 +1002,8 @@ function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:
 // ==========================================
 function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 function triggerAlarm(id) { timers[id].isOver = true; updateStudentStatus(timers[id].student); updateBoxUI(id); let melodyType = parseInt(document.getElementById("melodyType").value); playMelody(melodyType); playAlarmTTS(timers[id].student); }
-window.__tts_utterance = null; // 크롬 가비지 컬렉션 음성 짤림 방지용
+window.__tts_utterance_ko = null;
+window.__tts_utterance_en = null;
 
 function playAlarmTTS(studentName) {
     return new Promise(resolve => {
@@ -1012,36 +1013,57 @@ function playAlarmTTS(studentName) {
         let voices = window.speechSynthesis.getVoices(); 
         if (voices.length === 0) { setTimeout(() => playAlarmTTS(studentName).then(resolve), 100); return; }
         
-        let u = new SpeechSynthesisUtterance(); 
-        u.volume = ttsVolume; u.rate = 1.05; u.pitch = 1.1; 
-        window.__tts_utterance = u; // 버그 방지
-        
+        // 🎙️ 음성 탐색 헬퍼 함수
+        const getKoVoice = () => voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('InJoon')) || 
+                               voices.find(v => v.name.includes('Google') && v.lang.includes('ko')) || 
+                               voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성'))) || 
+                               voices.find(v => v.lang.includes('ko'));
+                               
+        const getEnVoice = () => voices.find(v => v.name.includes('Multilingual') && v.name.includes('Natural') && !v.name.includes('Male')) || 
+                               voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Male')) || 
+                               voices.find(v => v.name.includes('Google US English')) || 
+                               voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Female'))) || 
+                               voices.find(v => v.lang.includes('en'));
+
         if (voiceType === "1") { 
-            u.text = `${studentName}! ${studentName}!`; 
-            u.lang = 'ko-KR'; 
-            // 엣지(Natural) -> 크롬(Google) -> 범용 여성 -> 아무 한국어 순서로 탐색
-            let koVoice = voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('InJoon') && !v.name.includes('Male')) || 
-                          voices.find(v => v.name.includes('Google') && v.lang.includes('ko')) ||
-                          voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성'))) || 
-                          voices.find(v => v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('남성')) ||
-                          voices.find(v => v.lang.includes('ko'));
+            // 옵션 1: 한국어 이름만 두 번 (한국어 음성 전용)
+            let u = new SpeechSynthesisUtterance(`${studentName}! ${studentName}!`); 
+            u.volume = ttsVolume; u.rate = 1.05; u.pitch = 1.1; u.lang = 'ko-KR'; 
+            let koVoice = getKoVoice();
             if (koVoice) u.voice = koVoice; 
-        } 
-        else if (voiceType === "2" || voiceType === "3") { 
-            u.text = voiceType === "2" ? `${studentName}! Let's go home!` : `${studentName}! Time's up! It's time to go home!`; 
-            u.lang = 'en-US'; 
-            // 영어 역시 엣지 -> 크롬 -> 기타 범용 순으로 탐색
-            let enVoice = voices.find(v => v.name.includes('Multilingual') && v.name.includes('Natural') && !v.name.includes('Male')) || 
-                          voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Male')) || 
-                          voices.find(v => v.name.includes('Google US English')) ||
-                          voices.find(v => v.name.includes('Google') && v.lang.includes('en')) ||
-                          voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Female'))) || 
-                          voices.find(v => v.lang.includes('en') && !v.name.includes('Male')) ||
-                          voices.find(v => v.lang.includes('en'));
-            if (enVoice) u.voice = enVoice; 
+            
+            u.onend = resolve; u.onerror = resolve; 
+            window.__tts_utterance_ko = u; // 버그 방지
+            window.speechSynthesis.speak(u);
+            
+        } else if (voiceType === "2" || voiceType === "3") { 
+            // 옵션 2 & 3: 한국어로 이름 부르기 + 영어 문장 이어 부르기
+            
+            // 1단계: 한국어 이름 생성
+            let u1 = new SpeechSynthesisUtterance(`${studentName}!`);
+            u1.volume = ttsVolume; u1.rate = 1.05; u1.pitch = 1.1; u1.lang = 'ko-KR';
+            let koVoice = getKoVoice();
+            if (koVoice) u1.voice = koVoice;
+
+            // 2단계: 영어 문장 생성
+            let enText = voiceType === "2" ? "Let's go home!" : "Time's up! It's time to go home!";
+            let u2 = new SpeechSynthesisUtterance(enText);
+            u2.volume = ttsVolume; u2.rate = 1.05; u2.pitch = 1.1; u2.lang = 'en-US';
+            let enVoice = getEnVoice();
+            if (enVoice) u2.voice = enVoice;
+
+            // 이벤트 체이닝: 이름 재생이 끝나면 이어서 영어 재생
+            u1.onend = () => { window.speechSynthesis.speak(u2); };
+            u2.onend = resolve;
+            
+            u1.onerror = resolve; u2.onerror = resolve;
+
+            window.__tts_utterance_ko = u1;
+            window.__tts_utterance_en = u2;
+
+            // 1단계 재생 시작
+            window.speechSynthesis.speak(u1);
         }
-        u.onend = resolve; u.onerror = resolve; 
-        window.speechSynthesis.speak(u);
     });
 }
 // 🎵 멜로디 미리듣기 버튼용 함수
