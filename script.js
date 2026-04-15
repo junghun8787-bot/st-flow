@@ -252,7 +252,7 @@ function loadData() {
             timers = data.timerStates ? data.timerStates.map(ts => {
                 let t = { student: ts.student, remainingTime: ts.remainingTime, totalTime: ts.totalTime, overTime: ts.overTime, isOver: ts.isOver, interval: null, lastTick: ts.lastTick || 0 };
                 
-                // 백그라운드 및 새로고침 시간 보정 마법
+                // 백그라운드 및 새로고침 시간 보정
                 let alarmNeeded = false;
                 if (ts.isRunning && ts.lastTick > 0) {
                     const now = Date.now();
@@ -414,12 +414,10 @@ function startTimer(id, isResume = false) {
     const target = timers[id]; if (target.interval || target.student === "(empty)") return; 
     initAudio(); 
     
-    // 새로 시작하는 거라면 소리재생, 기록, 저장
     if (!isResume) {
         playUISound('start'); 
         logEvent(target.student, 'start', 'left'); 
         target.lastTick = Date.now();
-        saveToStorage();
     }
 
     target.interval = setInterval(() => { 
@@ -433,7 +431,7 @@ function startTimer(id, isResume = false) {
                 document.getElementById(`display-${id}`).innerText = formatTime(target.remainingTime); 
                 if (target.remainingTime === 0 && !target.isOver) {
                     triggerAlarm(id);
-                    saveToStorage(); // 0초 도달 시 즉시 저장
+                    saveToStorage();
                 }
             } else { 
                 if (!target.isOver) {
@@ -442,10 +440,18 @@ function startTimer(id, isResume = false) {
                 }
                 target.overTime += delta; 
                 document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime); 
-                if (target.overTime >= 300) { finishSession(id); } 
+                
+                // 💡 해결책 2: 자동 완료(리셋) 시간을 5분(300초)에서 1시간(3600초)으로 대폭 연장
+                if (target.overTime >= 3600) { finishSession(id); } 
             } 
         } 
     }, 250);
+
+    // 💡 해결책 1: 타이머 엔진(setInterval)이 완전히 켜진 직후에 저장하도록 순서 변경
+    if (!isResume) {
+        saveToStorage(); 
+    }
+    
     updateStudentStatus(target.student); updateBoxUI(id);
 }
 
@@ -1076,9 +1082,6 @@ function startRouletteAnimation() {
     spin();
 }
 
-// ==========================================
-// 10. SYSTEM EVENTS (새로고침 및 백그라운드 유지)
-// ==========================================
 // 브라우저가 닫히거나 최소화될 때 타이머의 마지막 시간을 안전하게 저장
 window.addEventListener('beforeunload', () => saveToStorage());
 document.addEventListener('visibilitychange', () => {
