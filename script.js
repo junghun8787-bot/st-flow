@@ -195,7 +195,7 @@ function changeDeskCount() {
         for(let i=newCount; i<timers.length; i++) { stopTimer(i); if(timers[i].student !== "(empty)") { attendanceMap.delete(timers[i].student); updateStudentStatus(timers[i].student); } }
         timers.length = newCount;
     } else if(newCount > timers.length) {
-        for(let i=timers.length; i<newCount; i++) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }); }
+        for(let i=timers.length; i<newCount; i++) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }); }
     }
     DESK_COUNT = newCount; createInitialGrid(); saveToStorage();
 }
@@ -214,7 +214,7 @@ function saveToStorage() {
             attendance: Array.from(attendanceMap.entries()), finishedSet: Array.from(finishedSet), assignOrderCounter: assignOrderCounter, 
             timerStates: timers.map(t => ({ 
                 student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, 
-                isRunning: t.interval !== null, lastTick: t.lastTick 
+                isRunning: t.interval !== null, lastTick: t.lastTick, startTimeStr: t.startTimeStr // 시작 시간 추가 저장
             })), 
             vols: { a: alarmVolume, t: ttsVolume, u: uiVolume, ttsVoice: document.getElementById("ttsVoiceSelect").value, melody: document.getElementById("melodyType").value, uiType: document.getElementById("uiSoundType").value }, 
             theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang, customStudentOrder: customStudentOrder, guestList: guestList
@@ -250,9 +250,8 @@ function loadData() {
             attendanceMap = new Map(data.attendance || []); finishedSet = new Set(data.finishedSet || []); assignOrderCounter = data.assignOrderCounter || 0; 
             
             timers = data.timerStates ? data.timerStates.map(ts => {
-                let t = { student: ts.student, remainingTime: ts.remainingTime, totalTime: ts.totalTime, overTime: ts.overTime, isOver: ts.isOver, interval: null, lastTick: ts.lastTick || 0 };
+                let t = { student: ts.student, remainingTime: ts.remainingTime, totalTime: ts.totalTime, overTime: ts.overTime, isOver: ts.isOver, interval: null, lastTick: ts.lastTick || 0, startTimeStr: ts.startTimeStr || "" };
                 
-                // 백그라운드 및 새로고침 시간 보정
                 let alarmNeeded = false;
                 if (ts.isRunning && ts.lastTick > 0) {
                     const now = Date.now();
@@ -275,9 +274,9 @@ function loadData() {
                 }
                 t.alarmNeeded = alarmNeeded;
                 return t;
-            }) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
+            }) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }));
 
-            while (timers.length < DESK_COUNT) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }); }
+            while (timers.length < DESK_COUNT) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }); }
             if (timers.length > DESK_COUNT) { timers.length = DESK_COUNT; }
 
             if(data.vols) { 
@@ -292,7 +291,6 @@ function loadData() {
             
             applyLanguage(); createInitialGrid(); generateStudents(); renderLogs();
 
-            // 새로고침 후 멈췄던 타이머 자동으로 조용히 다시 시작
             if (data.timerStates) {
                 data.timerStates.forEach((ts, idx) => {
                     if (ts.isRunning && idx < DESK_COUNT && timers[idx].student !== "(empty)") {
@@ -303,7 +301,7 @@ function loadData() {
             }
         } else {
             updateContentEditable("studentInput_PRE", []); updateContentEditable("studentInput_BASIC", []); updateContentEditable("studentInput_INTER", []); updateContentEditable("studentInput_ADV", []); updateContentEditable("studentInput_PREP", []);
-            timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
+            timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }));
             applyLanguage(); createInitialGrid(); generateStudents();
         }
     } catch(e) { console.error(e); applyLanguage(); createInitialGrid(); }
@@ -359,13 +357,24 @@ function updateStudentStatus(name) {
     let badge = btn.querySelector(".status-badge"); if (!badge) { badge = document.createElement("div"); badge.className = "status-badge"; btn.appendChild(badge); }
     badge.style.background = ""; badge.style.color = ""; let alertText = btn.querySelector(".alarm-alert-text"); if (alertText) alertText.innerText = tLang.statusTimeUp;
     const gridUnassigned = document.getElementById("grid-unassigned"); const gridActive = document.getElementById("grid-active"); const gridFinished = document.getElementById("grid-finished");
-    if (finishedSet.has(name)) { btn.classList.add("finished"); badge.innerHTML = tLang.statusFinish; gridFinished.appendChild(btn); } 
+    if (finishedSet.has(name)) { 
+        btn.classList.add("finished"); badge.innerHTML = tLang.statusFinish; gridFinished.appendChild(btn); 
+    } 
     else {
         let t = timers.find(x => x.student === name);
         if (t) {
-            if (t.isOver) { btn.classList.add("alarm-blink", "attended"); badge.innerHTML = tLang.statusTimeUp; badge.style.background = "var(--brand-danger)"; badge.style.color = "white"; } 
-            else if (t.interval) { btn.classList.add("playing", "attended"); badge.innerHTML = tLang.statusPlaying; badge.style.background = "var(--accent)"; badge.style.color = "#fff"; } 
-            else { btn.classList.add("attended"); badge.innerHTML = tLang.statusAssign; badge.style.background = "var(--brand-success)"; badge.style.color = "white"; }
+            if (t.isOver) { 
+                btn.classList.add("alarm-blink", "attended"); badge.innerHTML = tLang.statusTimeUp; badge.style.background = "var(--brand-danger)"; badge.style.color = "white"; 
+            } 
+            else if (t.interval || (t.startTimeStr && t.remainingTime > 0)) { 
+                btn.classList.add("playing", "attended"); 
+                // 수정된 부분: 수업 중 대신 시작 시간(예: "▶ 14:30")을 띄워줍니다.
+                badge.innerHTML = t.startTimeStr ? `▶ ${t.startTimeStr}` : tLang.statusPlaying; 
+                badge.style.background = "var(--accent)"; badge.style.color = "#fff"; 
+            } 
+            else { 
+                btn.classList.add("attended"); badge.innerHTML = tLang.statusAssign; badge.style.background = "var(--brand-success)"; badge.style.color = "white"; 
+            }
             gridActive.appendChild(btn);
         } else { badge.remove(); gridUnassigned.appendChild(btn); }
     }
@@ -418,6 +427,9 @@ function startTimer(id, isResume = false) {
         playUISound('start'); 
         logEvent(target.student, 'start', 'left'); 
         target.lastTick = Date.now();
+        // 수정된 부분: 시작할 때의 시간을 "HH:MM" 형태로 저장합니다.
+        const now = new Date();
+        target.startTimeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
     }
 
     target.interval = setInterval(() => { 
@@ -441,13 +453,11 @@ function startTimer(id, isResume = false) {
                 target.overTime += delta; 
                 document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime); 
                 
-                // 💡 해결책 2: 자동 완료(리셋) 시간을 5분(300초)에서 1시간(3600초)으로 대폭 연장
                 if (target.overTime >= 3600) { finishSession(id); } 
             } 
         } 
     }, 250);
 
-    // 💡 해결책 1: 타이머 엔진(setInterval)이 완전히 켜진 직후에 저장하도록 순서 변경
     if (!isResume) {
         saveToStorage(); 
     }
@@ -459,7 +469,7 @@ function stopTimer(id) { if (timers[id].interval) { clearInterval(timers[id].int
 function clearTime(id) { playUISound('cancel'); timers[id].remainingTime = 0; timers[id].totalTime = 0; timers[id].overTime = 0; timers[id].isOver = false; stopTimer(id); updateBoxUI(id); updateGauge(timers[id].student, 0, 1); saveToStorage(); }
 function cancelSession(id) { if(timers[id].student === "(empty)") return; playUISound('cancel'); const sn = timers[id].student; attendanceMap.delete(sn); resetTimerData(id, true); }
 function finishSession(id) { if(timers[id].student === "(empty)") return; playUISound('finish'); const sn = timers[id].student; finishedSet.add(sn); attendanceMap.delete(sn); logEvent(sn, 'finish', 'right', timers[id].overTime); resetTimerData(id, true); }
-function resetTimerData(id, resetUI) { stopTimer(id); const sn = timers[id].student; timers[id] = { student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }; updateBoxUI(id); if (resetUI) updateStudentStatus(sn); saveToStorage(); }
+function resetTimerData(id, resetUI) { stopTimer(id); const sn = timers[id].student; timers[id] = { student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }; updateBoxUI(id); if (resetUI) updateStudentStatus(sn); saveToStorage(); }
 function adjustTime(id, sec) { playUISound('click'); timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); saveToStorage(); }
 function updateGauge(studentName, remaining, total) { const btn = document.getElementById("btn-" + studentName); if (!btn) return; const gauge = btn.querySelector(".gauge-bg"); if (!gauge || total <= 0) return; gauge.style.width = (((total - remaining) / total) * 100) + "%"; }
 function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; }
@@ -591,7 +601,7 @@ function saveLogAction() {
     const blob = new Blob([logText], {type:'text/plain'}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); const fileNameDate = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`; a.download = `${academyName}_${className}_LOG_${fileNameDate}.txt`; a.click(); 
 }
 
-function askSoftReset() { const t = i18n[currentLang]; playUISound('click'); if(confirm(t.alertSoft)) { timers.forEach((t, i) => stopTimer(i)); timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 })); logLeftItems = []; logRightItems = []; attendanceMap.clear(); finishedSet.clear(); assignOrderCounter = 0; guestList = []; renderLogs(); for(let i=0; i<DESK_COUNT; i++) updateBoxUI(i); generateStudents(); saveToStorage(); alert(t.alertResetDone); } }
+function askSoftReset() { const t = i18n[currentLang]; playUISound('click'); if(confirm(t.alertSoft)) { timers.forEach((t, i) => stopTimer(i)); timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" })); logLeftItems = []; logRightItems = []; attendanceMap.clear(); finishedSet.clear(); assignOrderCounter = 0; guestList = []; renderLogs(); for(let i=0; i<DESK_COUNT; i++) updateBoxUI(i); generateStudents(); saveToStorage(); alert(t.alertResetDone); } }
 function askFactoryReset() { const t = i18n[currentLang]; playUISound('click'); if(confirm(t.alertHard)) { localStorage.removeItem(STORAGE_KEY); alert(t.alertFactoryDone); location.reload(); } }
 
 // ==========================================
