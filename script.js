@@ -212,7 +212,10 @@ function saveToStorage() {
         const data = { 
             deskCount: DESK_COUNT, academyName: academyName, className: className, students: studentsObj, logLeftItems: logLeftItems, logRightItems: logRightItems, 
             attendance: Array.from(attendanceMap.entries()), finishedSet: Array.from(finishedSet), assignOrderCounter: assignOrderCounter, 
-            timerStates: timers.map(t => ({ student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver })), 
+            timerStates: timers.map(t => ({ 
+                student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, 
+                isRunning: t.interval !== null, lastTick: t.lastTick 
+            })), 
             vols: { a: alarmVolume, t: ttsVolume, u: uiVolume, ttsVoice: document.getElementById("ttsVoiceSelect").value, melody: document.getElementById("melodyType").value, uiType: document.getElementById("uiSoundType").value }, 
             theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang, customStudentOrder: customStudentOrder, guestList: guestList
         };
@@ -246,7 +249,34 @@ function loadData() {
             logLeftItems = data.logLeftItems || []; logRightItems = data.logRightItems || []; 
             attendanceMap = new Map(data.attendance || []); finishedSet = new Set(data.finishedSet || []); assignOrderCounter = data.assignOrderCounter || 0; 
             
-            timers = data.timerStates ? data.timerStates.map(ts => ({ ...ts, interval: null, lastTick: 0 })) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
+            timers = data.timerStates ? data.timerStates.map(ts => {
+                let t = { student: ts.student, remainingTime: ts.remainingTime, totalTime: ts.totalTime, overTime: ts.overTime, isOver: ts.isOver, interval: null, lastTick: ts.lastTick || 0 };
+                
+                // 백그라운드 및 새로고침 시간 보정 마법
+                let alarmNeeded = false;
+                if (ts.isRunning && ts.lastTick > 0) {
+                    const now = Date.now();
+                    const delta = Math.floor((now - ts.lastTick) / 1000);
+                    if (delta > 0) {
+                        if (t.remainingTime > 0) {
+                            if (t.remainingTime >= delta) {
+                                t.remainingTime -= delta;
+                            } else {
+                                t.overTime = delta - t.remainingTime;
+                                t.remainingTime = 0;
+                                if (!t.isOver) alarmNeeded = true;
+                                t.isOver = true;
+                            }
+                        } else {
+                            t.overTime += delta;
+                        }
+                        t.lastTick = now - ((now - ts.lastTick) % 1000);
+                    }
+                }
+                t.alarmNeeded = alarmNeeded;
+                return t;
+            }) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
+
             while (timers.length < DESK_COUNT) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }); }
             if (timers.length > DESK_COUNT) { timers.length = DESK_COUNT; }
 
@@ -261,12 +291,22 @@ function loadData() {
             if(data.nameColor) { document.getElementById("nameColorSelect").value = data.nameColor; changeNameColor(); }
             
             applyLanguage(); createInitialGrid(); generateStudents(); renderLogs();
+
+            // 새로고침 후 멈췄던 타이머 자동으로 조용히 다시 시작
+            if (data.timerStates) {
+                data.timerStates.forEach((ts, idx) => {
+                    if (ts.isRunning && idx < DESK_COUNT && timers[idx].student !== "(empty)") {
+                        if (timers[idx].alarmNeeded) triggerAlarm(idx);
+                        startTimer(idx, true); 
+                    }
+                });
+            }
         } else {
             updateContentEditable("studentInput_PRE", []); updateContentEditable("studentInput_BASIC", []); updateContentEditable("studentInput_INTER", []); updateContentEditable("studentInput_ADV", []); updateContentEditable("studentInput_PREP", []);
             timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
             applyLanguage(); createInitialGrid(); generateStudents();
         }
-    } catch(e) { applyLanguage(); createInitialGrid(); }
+    } catch(e) { console.error(e); applyLanguage(); createInitialGrid(); }
 }
 
 function exportData() { saveToStorage(); const data = localStorage.getItem(STORAGE_KEY); const blob = new Blob([data], {type: "application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `Timer_Backup_PC_${new Date().toISOString().slice(0,10)}.json`; a.click(); }
@@ -370,18 +410,51 @@ function handleDropOnTimer(name, targetIdx, fromIdx) {
     saveToStorage();
 }
 
-function startTimer(id) {
-    const target = timers[id]; if (target.interval || target.student === "(empty)") return; initAudio(); playUISound('start'); logEvent(target.student, 'start', 'left'); target.lastTick = Date.now();
-    target.interval = setInterval(() => { const now = Date.now(); const delta = Math.floor((now - target.lastTick) / 1000); if (delta >= 1) { target.lastTick = now - ((now - target.lastTick) % 1000); if (target.remainingTime > 0) { target.remainingTime = Math.max(0, target.remainingTime - delta); updateGauge(target.student, target.remainingTime, target.totalTime); document.getElementById(`display-${id}`).innerText = formatTime(target.remainingTime); if (target.remainingTime === 0 && !target.isOver) triggerAlarm(id); } else { if (!target.isOver) triggerAlarm(id); target.overTime += delta; document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime); if (target.overTime >= 300) { finishSession(id); } } } }, 250);
+function startTimer(id, isResume = false) {
+    const target = timers[id]; if (target.interval || target.student === "(empty)") return; 
+    initAudio(); 
+    
+    // 새로 시작하는 거라면 소리재생, 기록, 저장
+    if (!isResume) {
+        playUISound('start'); 
+        logEvent(target.student, 'start', 'left'); 
+        target.lastTick = Date.now();
+        saveToStorage();
+    }
+
+    target.interval = setInterval(() => { 
+        const now = Date.now(); 
+        const delta = Math.floor((now - target.lastTick) / 1000); 
+        if (delta >= 1) { 
+            target.lastTick = now - ((now - target.lastTick) % 1000); 
+            if (target.remainingTime > 0) { 
+                target.remainingTime = Math.max(0, target.remainingTime - delta); 
+                updateGauge(target.student, target.remainingTime, target.totalTime); 
+                document.getElementById(`display-${id}`).innerText = formatTime(target.remainingTime); 
+                if (target.remainingTime === 0 && !target.isOver) {
+                    triggerAlarm(id);
+                    saveToStorage(); // 0초 도달 시 즉시 저장
+                }
+            } else { 
+                if (!target.isOver) {
+                    triggerAlarm(id);
+                    saveToStorage();
+                }
+                target.overTime += delta; 
+                document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime); 
+                if (target.overTime >= 300) { finishSession(id); } 
+            } 
+        } 
+    }, 250);
     updateStudentStatus(target.student); updateBoxUI(id);
 }
 
-function stopTimer(id) { if (timers[id].interval) { clearInterval(timers[id].interval); timers[id].interval = null; playUISound('stop'); updateStudentStatus(timers[id].student); updateBoxUI(id); } }
+function stopTimer(id) { if (timers[id].interval) { clearInterval(timers[id].interval); timers[id].interval = null; playUISound('stop'); updateStudentStatus(timers[id].student); updateBoxUI(id); saveToStorage(); } }
 function clearTime(id) { playUISound('cancel'); timers[id].remainingTime = 0; timers[id].totalTime = 0; timers[id].overTime = 0; timers[id].isOver = false; stopTimer(id); updateBoxUI(id); updateGauge(timers[id].student, 0, 1); saveToStorage(); }
 function cancelSession(id) { if(timers[id].student === "(empty)") return; playUISound('cancel'); const sn = timers[id].student; attendanceMap.delete(sn); resetTimerData(id, true); }
 function finishSession(id) { if(timers[id].student === "(empty)") return; playUISound('finish'); const sn = timers[id].student; finishedSet.add(sn); attendanceMap.delete(sn); logEvent(sn, 'finish', 'right', timers[id].overTime); resetTimerData(id, true); }
 function resetTimerData(id, resetUI) { stopTimer(id); const sn = timers[id].student; timers[id] = { student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }; updateBoxUI(id); if (resetUI) updateStudentStatus(sn); saveToStorage(); }
-function adjustTime(id, sec) { playUISound('click'); timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); }
+function adjustTime(id, sec) { playUISound('click'); timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); saveToStorage(); }
 function updateGauge(studentName, remaining, total) { const btn = document.getElementById("btn-" + studentName); if (!btn) return; const gauge = btn.querySelector(".gauge-bg"); if (!gauge || total <= 0) return; gauge.style.width = (((total - remaining) / total) * 100) + "%"; }
 function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; }
 
@@ -1002,3 +1075,12 @@ function startRouletteAnimation() {
     }
     spin();
 }
+
+// ==========================================
+// 10. SYSTEM EVENTS (새로고침 및 백그라운드 유지)
+// ==========================================
+// 브라우저가 닫히거나 최소화될 때 타이머의 마지막 시간을 안전하게 저장
+window.addEventListener('beforeunload', () => saveToStorage());
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveToStorage();
+});
