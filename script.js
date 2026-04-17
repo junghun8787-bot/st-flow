@@ -30,15 +30,20 @@ let currentTheme = "1";
 
 let currentLang = 'ko'; 
 
-// 게임 상태 변수
+// 📌 미니게임 모드 상태 (태블릿용 통합 관리)
 let isRouletteMode = false;
 let rouletteAngle = 0;
 let rouletteSpinning = false;
 let roulettePlayers = [];
 
+// 시간 수정 기능용 CSS 자동 주입
+const logTimeStyle = document.createElement('style');
+logTimeStyle.innerHTML = `.editable-log-time:hover { color: var(--accent); font-weight: bold; }`;
+document.head.appendChild(logTimeStyle);
+
 const i18n = {
     en: {
-        nav1: "STUDENTS", nav2: "TIMER", nav3: "ATTENDANCE LOG", nav4: "SETTING", nav5: "MINI GAME",
+        nav1: "STUDENTS", nav2: "TIMER", nav3: "LOG", nav4: "SETTING", nav5: "MINI GAME",
         logStart: "▶️ START LOG", logFinish: "🏁 FINISH LOG", exportLog: "💾 EXPORT LESSON LOG (.txt)",
         rosterMgt: "ROSTER MANAGEMENT", saveRoster: "💾 SAVE ROSTER DATA",
         placeholder: "Press Enter to add", msgSaveRoster: "Student roster data saved perfectly.",
@@ -61,7 +66,7 @@ const i18n = {
         alertBackupDone: "Backup restored! System will reboot.", alertBackupFail: "Invalid backup file."
     },
     ko: {
-        nav1: "학생 명단", nav2: "타이머", nav3: "출석/종료 기록", nav4: "설정", nav5: "미니 게임",
+        nav1: "명단", nav2: "타이머", nav3: "기록", nav4: "설정", nav5: "게임",
         logStart: "▶️ 시작 기록 (START)", logFinish: "🏁 종료 및 완료 (FINISH)", exportLog: "💾 수업 로그 내보내기 (.txt)",
         rosterMgt: "학생 명단 관리", saveRoster: "💾 명단 저장하기",
         placeholder: "엔터로 이름 입력", msgSaveRoster: "학생 명단이 완벽하게 저장되었습니다.",
@@ -85,9 +90,6 @@ const i18n = {
     }
 };
 
-// ==========================================
-// 2. INITIALIZATION & LIFECYCLE
-// ==========================================
 window.onload = () => { loadData(); updateDateUI(); }; 
 setInterval(updateDateUI, 60000); 
 
@@ -105,18 +107,22 @@ function applyLanguage() {
     document.querySelectorAll(".editable-roster").forEach(el => { el.setAttribute("data-placeholder", t.placeholder); });
     updateDateUI(); generateStudents(); 
     for (let i = 0; i < DESK_COUNT; i++) updateBoxUI(i);
+
     renderLogs(); 
 }
 
-// ==========================================
-// 3. UI & VIEW MANAGEMENT
-// ==========================================
 function switchView(view) {
-    playUISound('tab'); 
+    playUISound('tab');
     document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     document.getElementById(`view-${view}`).classList.add('active');
     document.querySelector(`.nav-tab[onclick*='${view}']`).classList.add('active');
+    
+    const homeBtn = document.getElementById('homeButtonContainer');
+    if(homeBtn) {
+        if(view === 'roster') homeBtn.classList.remove('visible');
+        else homeBtn.classList.add('visible');
+    }
     
     if(view === 'game') { 
         if(isRouletteMode && roulettePlayers.length === 0) setupRoulette(); 
@@ -154,15 +160,21 @@ window.goToTimer = function(name) {
             if(box) {
                 box.scrollIntoView({behavior: 'smooth', block: 'center'});
                 box.style.transition = 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.4s';
-                box.style.transform = 'scale(1.08)';
+                box.style.transform = 'scale(1.08) translateZ(0)';
                 box.style.boxShadow = '0 0 0 4px var(--accent), 0 15px 30px rgba(0,0,0,0.2)';
-                setTimeout(() => { box.style.transform = ''; box.style.boxShadow = ''; }, 1500);
+                setTimeout(() => { box.style.transform = 'translateZ(0)'; box.style.boxShadow = ''; }, 1500);
             }
         }, 300);
     }
 };
 
-function updateCustomNames() { academyName = document.getElementById('inputAcademyName').value || "향촌삼성영어학원"; className = document.getElementById('inputClassName').value || "Maple Classroom"; document.getElementById('displayAcademyName').innerText = academyName; document.getElementById('displayClassName').innerText = className; saveToStorage(); }
+function updateCustomNames() {
+    academyName = document.getElementById('inputAcademyName').value || "향촌삼성영어학원";
+    className = document.getElementById('inputClassName').value || "Maple Classroom";
+    document.getElementById('displayAcademyName').innerText = academyName;
+    document.getElementById('displayClassName').innerText = className;
+    saveToStorage();
+}
 
 function changeNameColor() {
     const val = document.getElementById("nameColorSelect").value; const root = document.documentElement;
@@ -188,39 +200,40 @@ function changeDeskCount() {
     if(newCount < timers.length) {
         for(let i=newCount; i<timers.length; i++) {
             if(timers[i].student !== "(empty)") {
-                if(!confirm(`타이머 ${newCount+1}번 이상에 배치된 학생이 있습니다. 그래도 타이머를 줄이시겠습니까? (해당 학생은 자동으로 자리 취소됩니다.)`)) { document.getElementById("deskCountSelect").value = DESK_COUNT; return; }
+                if(!confirm(`타이머 ${newCount+1}번 이상에 배치된 학생이 있습니다. 그래도 타이머를 줄이시겠습니까? (해당 학생은 자동으로 자리 취소됩니다.)`)) {
+                    document.getElementById("deskCountSelect").value = DESK_COUNT; return;
+                }
                 break;
             }
         }
-        for(let i=newCount; i<timers.length; i++) { stopTimer(i); if(timers[i].student !== "(empty)") { attendanceMap.delete(timers[i].student); updateStudentStatus(timers[i].student); } }
+        for(let i=newCount; i<timers.length; i++) {
+            stopTimer(i);
+            if(timers[i].student !== "(empty)") { attendanceMap.delete(timers[i].student); updateStudentStatus(timers[i].student); }
+        }
         timers.length = newCount;
     } else if(newCount > timers.length) {
-        for(let i=timers.length; i<newCount; i++) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }); }
+        for(let i=timers.length; i<newCount; i++) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }); }
     }
     DESK_COUNT = newCount; createInitialGrid(); saveToStorage();
 }
 
-// ==========================================
-// 4. DATA PERSISTENCE
-// ==========================================
 function saveToStorage() {
     try {
         const studentsObj = { 
             PRE: getNamesFromContentEditable("studentInput_PRE").join("\n"), BASIC: getNamesFromContentEditable("studentInput_BASIC").join("\n"), 
-            INTER: getNamesFromContentEditable("studentInput_INTER").join("\n"), ADV: getNamesFromContentEditable("studentInput_ADV").join("\n"), PREP: getNamesFromContentEditable("studentInput_PREP").join("\n") 
+            INTER: getNamesFromContentEditable("studentInput_INTER").join("\n"), ADV: getNamesFromContentEditable("studentInput_ADV").join("\n"), 
+            PREP: getNamesFromContentEditable("studentInput_PREP").join("\n") 
         };
         const data = { 
             deskCount: DESK_COUNT, academyName: academyName, className: className, students: studentsObj, logLeftItems: logLeftItems, logRightItems: logRightItems, 
             attendance: Array.from(attendanceMap.entries()), finishedSet: Array.from(finishedSet), assignOrderCounter: assignOrderCounter, 
-            timerStates: timers.map(t => ({ 
-                student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, 
-                isRunning: t.interval !== null, lastTick: t.lastTick, startTimeStr: t.startTimeStr // 시작 시간 추가 저장
-            })), 
+            timerStates: timers.map(t => ({ student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver })), 
             vols: { a: alarmVolume, t: ttsVolume, u: uiVolume, ttsVoice: document.getElementById("ttsVoiceSelect").value, melody: document.getElementById("melodyType").value, uiType: document.getElementById("uiSoundType").value }, 
-            theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang, customStudentOrder: customStudentOrder, guestList: guestList
+            theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang,
+            customStudentOrder: customStudentOrder, guestList: guestList
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch(e) { console.error(e); }
+    } catch(e) {}
 }
 
 function loadData() {
@@ -233,6 +246,7 @@ function loadData() {
             
             customStudentOrder = data.customStudentOrder || [];
             guestList = data.guestList || [];
+
             academyName = data.academyName || "향촌삼성영어학원"; className = data.className || "Maple Classroom";
             document.getElementById('inputAcademyName').value = academyName; document.getElementById('inputClassName').value = className;
             document.getElementById('displayAcademyName').innerText = academyName; document.getElementById('displayClassName').innerText = className; 
@@ -240,8 +254,10 @@ function loadData() {
             if (data.students) { 
                 if (typeof data.students === 'string') { updateContentEditable("studentInput_PRE", [data.students]); } 
                 else { 
-                    updateContentEditable("studentInput_PRE", (data.students.PRE || "").split('\n').filter(s=>s.trim())); updateContentEditable("studentInput_BASIC", (data.students.BASIC || "").split('\n').filter(s=>s.trim()));
-                    updateContentEditable("studentInput_INTER", (data.students.INTER || "").split('\n').filter(s=>s.trim())); updateContentEditable("studentInput_ADV", (data.students.ADV || "").split('\n').filter(s=>s.trim()));
+                    updateContentEditable("studentInput_PRE", (data.students.PRE || "").split('\n').filter(s=>s.trim()));
+                    updateContentEditable("studentInput_BASIC", (data.students.BASIC || "").split('\n').filter(s=>s.trim()));
+                    updateContentEditable("studentInput_INTER", (data.students.INTER || "").split('\n').filter(s=>s.trim()));
+                    updateContentEditable("studentInput_ADV", (data.students.ADV || "").split('\n').filter(s=>s.trim()));
                     updateContentEditable("studentInput_PREP", (data.students.PREP || "").split('\n').filter(s=>s.trim()));
                 } 
             }
@@ -249,34 +265,8 @@ function loadData() {
             logLeftItems = data.logLeftItems || []; logRightItems = data.logRightItems || []; 
             attendanceMap = new Map(data.attendance || []); finishedSet = new Set(data.finishedSet || []); assignOrderCounter = data.assignOrderCounter || 0; 
             
-            timers = data.timerStates ? data.timerStates.map(ts => {
-                let t = { student: ts.student, remainingTime: ts.remainingTime, totalTime: ts.totalTime, overTime: ts.overTime, isOver: ts.isOver, interval: null, lastTick: ts.lastTick || 0, startTimeStr: ts.startTimeStr || "" };
-                
-                let alarmNeeded = false;
-                if (ts.isRunning && ts.lastTick > 0) {
-                    const now = Date.now();
-                    const delta = Math.floor((now - ts.lastTick) / 1000);
-                    if (delta > 0) {
-                        if (t.remainingTime > 0) {
-                            if (t.remainingTime >= delta) {
-                                t.remainingTime -= delta;
-                            } else {
-                                t.overTime = delta - t.remainingTime;
-                                t.remainingTime = 0;
-                                if (!t.isOver) alarmNeeded = true;
-                                t.isOver = true;
-                            }
-                        } else {
-                            t.overTime += delta;
-                        }
-                        t.lastTick = now - ((now - ts.lastTick) % 1000);
-                    }
-                }
-                t.alarmNeeded = alarmNeeded;
-                return t;
-            }) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }));
-
-            while (timers.length < DESK_COUNT) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }); }
+            timers = data.timerStates ? data.timerStates.map(ts => ({ ...ts, interval: null, lastTick: 0 })) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
+            while (timers.length < DESK_COUNT) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }); }
             if (timers.length > DESK_COUNT) { timers.length = DESK_COUNT; }
 
             if(data.vols) { 
@@ -290,31 +280,37 @@ function loadData() {
             if(data.nameColor) { document.getElementById("nameColorSelect").value = data.nameColor; changeNameColor(); }
             
             applyLanguage(); createInitialGrid(); generateStudents(); renderLogs();
-
-            if (data.timerStates) {
-                data.timerStates.forEach((ts, idx) => {
-                    if (ts.isRunning && idx < DESK_COUNT && timers[idx].student !== "(empty)") {
-                        if (timers[idx].alarmNeeded) triggerAlarm(idx);
-                        startTimer(idx, true); 
-                    }
-                });
-            }
         } else {
             updateContentEditable("studentInput_PRE", []); updateContentEditable("studentInput_BASIC", []); updateContentEditable("studentInput_INTER", []); updateContentEditable("studentInput_ADV", []); updateContentEditable("studentInput_PREP", []);
-            timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }));
+            timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
             applyLanguage(); createInitialGrid(); generateStudents();
         }
-    } catch(e) { console.error(e); applyLanguage(); createInitialGrid(); }
+    } catch(e) { applyLanguage(); createInitialGrid(); }
 }
 
-function exportData() { saveToStorage(); const data = localStorage.getItem(STORAGE_KEY); const blob = new Blob([data], {type: "application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `Timer_Backup_PC_${new Date().toISOString().slice(0,10)}.json`; a.click(); }
-function triggerImport() { document.getElementById("importFile").click(); }
-function importData(e) { const t = i18n[currentLang]; const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = function(evt) { try { const json = JSON.parse(evt.target.result); localStorage.setItem(STORAGE_KEY, JSON.stringify(json)); alert(t.alertBackupDone); location.reload(); } catch(err) { alert(t.alertBackupFail); } }; reader.readAsText(file); }
+function exportData() { 
+    saveToStorage(); const data = localStorage.getItem(STORAGE_KEY); 
+    const blob = new Blob([data], {type: "application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); 
+    a.download = `Timer_Backup_PC_${new Date().toISOString().slice(0,10)}.json`; a.click(); 
+}
 
-// ==========================================
-// 5. ROSTER & QUICK CONTROLS
-// ==========================================
-function getNamesFromContentEditable(id) { const el = document.getElementById(id); if(!el) return []; let html = el.innerHTML; html = html.replace(/<div[^>]*>/gi, '\n').replace(/<\/div>/gi, '\n').replace(/<p[^>]*>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<br\s*[\/]?>/gi, '\n'); let text = html.replace(/<[^>]+>/g, ''); return text.split(/\n/).map(s => s.trim()).filter(s => s !== ""); }
+function triggerImport() { document.getElementById("importFile").click(); }
+function importData(e) { 
+    const t = i18n[currentLang]; const file = e.target.files[0]; if (!file) return; 
+    const reader = new FileReader(); 
+    reader.onload = function(evt) { 
+        try { const json = JSON.parse(evt.target.result); localStorage.setItem(STORAGE_KEY, JSON.stringify(json)); alert(t.alertBackupDone); location.reload(); } 
+        catch(err) { alert(t.alertBackupFail); } 
+    }; 
+    reader.readAsText(file); 
+}
+
+function getNamesFromContentEditable(id) {
+    const el = document.getElementById(id); if(!el) return [];
+    let html = el.innerHTML;
+    html = html.replace(/<div[^>]*>/gi, '\n').replace(/<\/div>/gi, '\n').replace(/<p[^>]*>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<br\s*[\/]?>/gi, '\n');
+    let text = html.replace(/<[^>]+>/g, ''); return text.split(/\n/).map(s => s.trim()).filter(s => s !== "");
+}
 function updateContentEditable(id, arr) { const el = document.getElementById(id); if(el) el.innerHTML = arr.map(name => `<div>${name}</div>`).join(''); }
 
 window.quickStart = function(name) { let tIdx = timers.findIndex(t => t.student === name); if (tIdx !== -1) startTimer(tIdx); };
@@ -325,152 +321,241 @@ window.removeGuest = function(name) { if(confirm(`게스트 '${name}' 학생을 
 window.cancelFromCard = function(name) { let tIdx = timers.findIndex(t => t.student === name); if (tIdx !== -1) cancelSession(tIdx); };
 
 function generateStudents() {
-    document.getElementById("grid-unassigned").innerHTML = ""; document.getElementById("grid-active").innerHTML = ""; document.getElementById("grid-finished").innerHTML = "";
-    studentLevels = {}; const levels = ['PRE', 'BASIC', 'INTER', 'ADV', 'PREP']; const tLang = i18n[currentLang]; let allNames = [];
+    document.getElementById("grid-unassigned").innerHTML = "";
+    document.getElementById("grid-active").innerHTML = "";
+    document.getElementById("grid-finished").innerHTML = "";
+
+    studentLevels = {}; 
+    const levels = ['PRE', 'BASIC', 'INTER', 'ADV', 'PREP'];
+    const tLang = i18n[currentLang];
+    let allNames = [];
+
     levels.forEach(lvl => { const names = getNamesFromContentEditable("studentInput_" + lvl); names.forEach(n => { studentLevels[n] = lvl; allNames.push(n); }); });
     guestList.forEach(n => { studentLevels[n] = 'GUEST'; allNames.push(n); });
 
-    let newOrder = []; customStudentOrder.forEach(name => { if(allNames.includes(name)) newOrder.push(name); }); allNames.forEach(name => { if(!newOrder.includes(name)) newOrder.push(name); }); customStudentOrder = newOrder; allNames = customStudentOrder;
+    let newOrder = [];
+    customStudentOrder.forEach(name => { if(allNames.includes(name)) newOrder.push(name); });
+    allNames.forEach(name => { if(!newOrder.includes(name)) newOrder.push(name); });
+    customStudentOrder = newOrder;
+    allNames = customStudentOrder;
 
     allNames.forEach((n, index) => {
-        const lvl = studentLevels[n]; const btn = document.createElement("button"); btn.id = "btn-" + n; 
-        let levelLabel = (lvl === 'PREP') ? 'PREP31' : (lvl === 'ADV' ? 'ADV' : lvl); if(lvl === 'GUEST') levelLabel = 'GUEST';
+        const lvl = studentLevels[n];
+        const btn = document.createElement("button"); btn.id = "btn-" + n; 
+        
+        let levelLabel = (lvl === 'PREP') ? 'PREP31' : (lvl === 'ADV' ? 'ADV' : lvl); 
+        if(lvl === 'GUEST') levelLabel = 'GUEST';
+
         btn.innerHTML = `
-            <div class="level-tag">${levelLabel}</div><div class="gauge-bg"></div>
+            <div class="level-tag">${levelLabel}</div>
+            <div class="gauge-bg"></div>
             <button class="card-cancel-btn" onclick="event.stopPropagation(); cancelFromCard('${n}')">✖</button>
             <button class="guest-delete-btn" onclick="event.stopPropagation(); removeGuest('${n}')">✖</button>
-            <div class="alarm-alert-text"></div><span class="name-text">${n}</span>
-            <div class="quick-controls"><button class="quick-btn q-start" onclick="event.stopPropagation(); quickStart('${n}')">${tLang.quickStart}</button><button class="quick-btn q-finish" onclick="event.stopPropagation(); quickFinish('${n}')">${tLang.quickFinish}</button></div>
+            <div class="alarm-alert-text">${tLang.statusTimeUp}</div>
+            <span class="name-text">${n}</span>
+            <div class="quick-controls">
+                <button class="quick-btn q-start" onclick="event.stopPropagation(); quickStart('${n}')">${tLang.quickStart}</button>
+                <button class="quick-btn q-finish" onclick="event.stopPropagation(); quickFinish('${n}')">${tLang.quickFinish}</button>
+            </div>
         `;
-        btn.draggable = true; btn.style.order = index;
+        btn.draggable = true; 
+        btn.style.order = index;
+
         btn.ondragstart = (e) => { draggedName = n; draggedNameForList = n; draggedFromIndex = null; e.dataTransfer.effectAllowed = 'move'; playUISound('click'); };
-        btn.ondragenter = (e) => { e.preventDefault(); btn.classList.add("drag-over"); }; btn.ondragover = (e) => { e.preventDefault(); btn.classList.add("drag-over"); }; btn.ondragleave = (e) => { btn.classList.remove("drag-over"); };
-        btn.ondrop = (e) => { e.preventDefault(); btn.classList.remove("drag-over"); if (draggedFromIndex !== null) return; if (draggedNameForList && draggedNameForList !== n) { let i1 = customStudentOrder.indexOf(draggedNameForList); let i2 = customStudentOrder.indexOf(n); if (i1 > -1 && i2 > -1) { let temp = customStudentOrder[i1]; customStudentOrder[i1] = customStudentOrder[i2]; customStudentOrder[i2] = temp; playUISound('click'); generateStudents(); } } };
-        btn.onclick = () => { btn.classList.add("clicked"); setTimeout(() => btn.classList.remove("clicked"), 150); if (attendanceMap.has(n)) { goToTimer(n); } else { if (finishedSet.has(n)) finishedSet.delete(n); const emptyIdx = timers.findIndex(t => t.student === "(empty)"); if (emptyIdx !== -1) handleDropOnTimer(n, emptyIdx, null); } };
-        document.getElementById("grid-unassigned").appendChild(btn); updateStudentStatus(n);
+        btn.ondragenter = (e) => { e.preventDefault(); btn.classList.add("drag-over"); };
+        btn.ondragover = (e) => { e.preventDefault(); btn.classList.add("drag-over"); };
+        btn.ondragleave = (e) => { btn.classList.remove("drag-over"); };
+        
+        btn.ondrop = (e) => {
+            e.preventDefault(); btn.classList.remove("drag-over");
+            if (draggedFromIndex !== null) return; 
+            if (draggedNameForList && draggedNameForList !== n) {
+                let i1 = customStudentOrder.indexOf(draggedNameForList);
+                let i2 = customStudentOrder.indexOf(n);
+                if (i1 > -1 && i2 > -1) {
+                    let temp = customStudentOrder[i1];
+                    customStudentOrder[i1] = customStudentOrder[i2];
+                    customStudentOrder[i2] = temp;
+                    playUISound('click'); 
+                    generateStudents(); 
+                }
+            }
+        };
+
+        btn.onclick = () => { 
+            btn.classList.add("clicked"); setTimeout(() => btn.classList.remove("clicked"), 150);
+            if (attendanceMap.has(n)) { 
+                goToTimer(n);
+            } 
+            else { 
+                if (finishedSet.has(n)) finishedSet.delete(n); 
+                const emptyIdx = timers.findIndex(t => t.student === "(empty)"); 
+                if (emptyIdx !== -1) handleDropOnTimer(n, emptyIdx, null); 
+            }
+        };
+        
+        document.getElementById("grid-unassigned").appendChild(btn); 
+        updateStudentStatus(n);
     });
-    timers.forEach((t, idx) => { if(t.student !== "(empty)") { updateGauge(t.student, t.remainingTime, t.totalTime); updateBoxUI(idx); } }); saveToStorage();
+    
+    timers.forEach((t, idx) => { if(t.student !== "(empty)") { updateGauge(t.student, t.remainingTime, t.totalTime); updateBoxUI(idx); } }); 
+    saveToStorage();
 }
 
 function updateStudentStatus(name) {
-    const tLang = i18n[currentLang]; const btn = document.getElementById("btn-" + name); if (!btn) return; const lvl = studentLevels[name] || ''; btn.className = `student-btn level-${lvl}`; 
-    let badge = btn.querySelector(".status-badge"); if (!badge) { badge = document.createElement("div"); badge.className = "status-badge"; btn.appendChild(badge); }
-    badge.style.background = ""; badge.style.color = ""; let alertText = btn.querySelector(".alarm-alert-text"); if (alertText) alertText.innerText = tLang.statusTimeUp;
-    const gridUnassigned = document.getElementById("grid-unassigned"); const gridActive = document.getElementById("grid-active"); const gridFinished = document.getElementById("grid-finished");
+    const tLang = i18n[currentLang];
+    const btn = document.getElementById("btn-" + name); if (!btn) return;
+    const lvl = studentLevels[name] || '';
+    
+    btn.className = `student-btn level-${lvl}`; 
+    
+    let badge = btn.querySelector(".status-badge");
+    if (!badge) { badge = document.createElement("div"); badge.className = "status-badge"; btn.appendChild(badge); }
+    badge.style.background = ""; badge.style.color = "";
+    
+    const gridUnassigned = document.getElementById("grid-unassigned");
+    const gridActive = document.getElementById("grid-active");
+    const gridFinished = document.getElementById("grid-finished");
+
     if (finishedSet.has(name)) { 
-        btn.classList.add("finished"); badge.innerHTML = tLang.statusFinish; gridFinished.appendChild(btn); 
-    } 
-    else {
+        btn.classList.add("finished"); badge.innerHTML = tLang.statusFinish;
+        gridFinished.appendChild(btn);
+    } else {
         let t = timers.find(x => x.student === name);
         if (t) {
             if (t.isOver) { 
-                btn.classList.add("alarm-blink", "attended"); badge.innerHTML = tLang.statusTimeUp; badge.style.background = "var(--brand-danger)"; badge.style.color = "white"; 
-            } 
-            else if (t.interval || (t.startTimeStr && t.remainingTime > 0)) { 
-                btn.classList.add("playing", "attended"); 
-                // 수정된 부분: 수업 중 대신 시작 시간(예: "▶ 14:30")을 띄워줍니다.
-                badge.innerHTML = t.startTimeStr ? `▶ ${t.startTimeStr}` : tLang.statusPlaying; 
+                btn.classList.add("alarm-blink", "attended"); badge.innerHTML = tLang.statusTimeUp; 
+                badge.style.background = "var(--brand-danger)"; badge.style.color = "white"; 
+            } else if (t.interval) { 
+                btn.classList.add("playing", "attended"); badge.innerHTML = tLang.statusPlaying; 
                 badge.style.background = "var(--accent)"; badge.style.color = "#fff"; 
-            } 
-            else { 
-                btn.classList.add("attended"); badge.innerHTML = tLang.statusAssign; badge.style.background = "var(--brand-success)"; badge.style.color = "white"; 
+            } else { 
+                btn.classList.add("attended"); badge.innerHTML = tLang.statusAssign; 
+                badge.style.background = "var(--brand-success)"; badge.style.color = "white"; 
             }
             gridActive.appendChild(btn);
-        } else { badge.remove(); gridUnassigned.appendChild(btn); }
+        } else { 
+            badge.remove(); 
+            gridUnassigned.appendChild(btn);
+        }
     }
 }
 
-// ==========================================
-// 6. TIMER LOGIC
-// ==========================================
 function createInitialGrid() {
     const grid = document.getElementById("grid"); grid.innerHTML = "";
     for (let i = 0; i < DESK_COUNT; i++) {
         const box = document.createElement("div"); box.id = `box-${i}`; box.className = "timer-box";
-        box.ondragenter = (e) => { e.preventDefault(); box.classList.add("drag-over"); }; box.ondragover = (e) => { e.preventDefault(); box.classList.add("drag-over"); }; box.ondragleave = (e) => { box.classList.remove("drag-over"); };
+        box.ondragenter = (e) => { e.preventDefault(); box.classList.add("drag-over"); };
+        box.ondragover = (e) => { e.preventDefault(); box.classList.add("drag-over"); };
+        box.ondragleave = (e) => { box.classList.remove("drag-over"); };
         box.ondrop = (e) => { e.preventDefault(); box.classList.remove("drag-over"); handleDropOnTimer(draggedName, i, draggedFromIndex); };
         grid.appendChild(box); updateBoxUI(i);
     }
 }
 
 function updateBoxUI(id) {
-    const tLang = i18n[currentLang]; const t = timers[id]; const box = document.getElementById(`box-${id}`); if (!box) return;
-    const isAssigned = t.student !== "(empty)"; const isPlaying = t.interval !== null; box.className = `timer-box ${t.isOver ? 'done' : ''} ${isPlaying ? 'playing' : ''}`;
-    const lvl = studentLevels[t.student] || ''; const panelClass = isAssigned && lvl ? `info-panel timer-bg-${lvl}` : 'info-panel';
-    const panelStyle = isAssigned ? "" : "background: transparent; border: 2px dashed var(--border); box-shadow: none !important;"; const nameDisplay = isAssigned ? t.student : '&nbsp;'; const numDisplay = String(id+1).padStart(2, '0');
+    const tLang = i18n[currentLang];
+    const t = timers[id]; const box = document.getElementById(`box-${id}`); if (!box) return;
+    const isAssigned = t.student !== "(empty)";
+    const isPlaying = t.interval !== null;
+    box.className = `timer-box ${t.isOver ? 'done' : ''} ${isPlaying ? 'playing' : ''}`;
+    
+    const lvl = studentLevels[t.student] || '';
+    const panelClass = isAssigned && lvl ? `info-panel timer-bg-${lvl}` : 'info-panel';
+
+    const panelStyle = isAssigned ? "" : "background: transparent; border: 2px dashed var(--border); box-shadow: none !important;";
+    const nameDisplay = isAssigned ? t.student : '&nbsp;';
+    const numDisplay = String(id+1).padStart(2, '0');
+
     box.innerHTML = `
-        <button class="box-roster-btn" onclick="switchView('roster');">📋 명단</button>
         <div class="desk-id" style="opacity: ${isAssigned ? '1' : '0.4'}">${numDisplay}</div>
         <div class="${panelClass}" draggable="${isAssigned}" style="${panelStyle}">
-            <div class="student-name-display">${nameDisplay}</div><div class="time-display" id="display-${id}" style="visibility: ${isAssigned ? 'visible' : 'hidden'}">${t.isOver ? '+'+formatTime(t.overTime) : formatTime(t.remainingTime)}</div>
+            <div class="student-name-display" ${isAssigned ? `style="cursor:pointer;" onclick="playUISound('tab'); switchView('roster');"` : ''}>${nameDisplay}</div>
+            <div class="time-display" id="display-${id}" style="visibility: ${isAssigned ? 'visible' : 'hidden'}">${t.isOver ? '+'+formatTime(t.overTime) : formatTime(t.remainingTime)}</div>
         </div>
-        <div class="time-controls"><button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 3000)">+50</button><button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 600)">+10</button><button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 300)">+05</button><button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 60)">+01</button><button class="time-btn btn-3d-sm minus" onclick="adjustTime(${id}, -600)">-10</button><button class="time-btn btn-3d-sm minus" onclick="adjustTime(${id}, -300)">-05</button><button class="time-btn btn-3d-sm minus" onclick="adjustTime(${id}, -60)">-01</button><button class="time-btn btn-3d-sm clear" onclick="clearTime(${id})">${tLang.btnClear}</button></div>
-        <div class="action-btn-row"><button class="action-btn btn-start" onclick="startTimer(${id})">${tLang.btnStart}</button></div>
-        <div class="action-btn-row"><button class="action-btn btn-stop" onclick="stopTimer(${id})">${tLang.btnStop}</button><button class="action-btn btn-cancel" onclick="cancelSession(${id})">${tLang.btnCancel}</button></div>
-        <div class="action-btn-row"><button class="action-btn btn-finish" onclick="finishSession(${id})">${tLang.btnFinish}</button></div>
+        
+        <div class="time-controls">
+            <button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 3000)">+50</button>
+            <button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 600)">+10</button>
+            <button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 300)">+05</button>
+            <button class="time-btn btn-3d-sm" onclick="adjustTime(${id}, 60)">+01</button>
+            <button class="time-btn btn-3d-sm minus" onclick="adjustTime(${id}, -600)">-10</button>
+            <button class="time-btn btn-3d-sm minus" onclick="adjustTime(${id}, -300)">-05</button>
+            <button class="time-btn btn-3d-sm minus" onclick="adjustTime(${id}, -60)">-01</button>
+            <button class="time-btn btn-3d-sm clear" onclick="clearTime(${id})">${tLang.btnClear}</button>
+        </div>
+        
+        <div class="action-btn-row">
+            <button class="action-btn btn-start" onclick="startTimer(${id})">${tLang.btnStart}</button>
+        </div>
+        
+        <div class="action-btn-row">
+            <button class="action-btn btn-stop" onclick="stopTimer(${id})">${tLang.btnStop}</button>
+            <button class="action-btn btn-cancel" onclick="cancelSession(${id})">${tLang.btnCancel}</button>
+        </div>
+        
+        <div class="action-btn-row">
+            <button class="action-btn btn-finish" onclick="finishSession(${id})">${tLang.btnFinish}</button>
+        </div>
     `;
-    const infoPanel = box.querySelector('.info-panel'); infoPanel.ondragstart = (e) => { if(isAssigned) { draggedName = t.student; draggedFromIndex = id; draggedNameForList = null; e.dataTransfer.effectAllowed = 'move'; } else { e.preventDefault(); } };
+    const infoPanel = box.querySelector('.info-panel');
+    infoPanel.ondragstart = (e) => { if(isAssigned) { draggedName = t.student; draggedFromIndex = id; draggedNameForList = null; e.dataTransfer.effectAllowed = 'move'; } else { e.preventDefault(); } };
 }
 
 function handleDropOnTimer(name, targetIdx, fromIdx) {
     if (fromIdx === targetIdx) return;
-    if (fromIdx !== null) { stopTimer(fromIdx); stopTimer(targetIdx); const fData = { ...timers[fromIdx] }; const tData = { ...timers[targetIdx] }; timers[targetIdx] = { ...fData, interval: null }; timers[fromIdx] = { ...tData, interval: null }; updateBoxUI(fromIdx); updateBoxUI(targetIdx); updateStudentStatus(timers[fromIdx].student); updateStudentStatus(timers[targetIdx].student); playUISound('assign'); } 
-    else { let alreadyIdx = timers.findIndex(t => t.student === name); if(alreadyIdx !== -1) resetTimerData(alreadyIdx, false); timers[targetIdx].student = name; timers[targetIdx].remainingTime = 3000; timers[targetIdx].totalTime = 3000; if (!attendanceMap.has(name)) { assignOrderCounter++; attendanceMap.set(name, assignOrderCounter); if(finishedSet.has(name)) finishedSet.delete(name); } playUISound('assign'); updateBoxUI(targetIdx); updateStudentStatus(name); updateGauge(name, 3000, 3000); }
+    if (fromIdx !== null) {
+        stopTimer(fromIdx); stopTimer(targetIdx);
+        const fData = { ...timers[fromIdx] }; const tData = { ...timers[targetIdx] };
+        timers[targetIdx] = { ...fData, interval: null }; timers[fromIdx] = { ...tData, interval: null };
+        updateBoxUI(fromIdx); updateBoxUI(targetIdx); updateStudentStatus(timers[fromIdx].student); updateStudentStatus(timers[targetIdx].student); playUISound('assign');
+    } else {
+        let alreadyIdx = timers.findIndex(t => t.student === name); if(alreadyIdx !== -1) resetTimerData(alreadyIdx, false);
+        timers[targetIdx].student = name; timers[targetIdx].remainingTime = 3000; timers[targetIdx].totalTime = 3000;
+        if (!attendanceMap.has(name)) { assignOrderCounter++; attendanceMap.set(name, assignOrderCounter); if(finishedSet.has(name)) finishedSet.delete(name); }
+        playUISound('assign'); updateBoxUI(targetIdx); updateStudentStatus(name); updateGauge(name, 3000, 3000);
+    }
     saveToStorage();
 }
 
-function startTimer(id, isResume = false) {
-    const target = timers[id]; if (target.interval || target.student === "(empty)") return; 
-    initAudio(); 
+function startTimer(id) {
+    const target = timers[id]; if (target.interval || target.student === "(empty)") return;
+    initAudio(); playUISound('start'); logEvent(target.student, 'start', 'left'); target.lastTick = Date.now();
     
-    if (!isResume) {
-        playUISound('start'); 
-        logEvent(target.student, 'start', 'left'); 
-        target.lastTick = Date.now();
-        // 수정된 부분: 시작할 때의 시간을 "HH:MM" 형태로 저장합니다.
-        const now = new Date();
-        target.startTimeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-    }
-
-    target.interval = setInterval(() => { 
-        const now = Date.now(); 
-        const delta = Math.floor((now - target.lastTick) / 1000); 
-        if (delta >= 1) { 
-            target.lastTick = now - ((now - target.lastTick) % 1000); 
-            if (target.remainingTime > 0) { 
+    target.interval = setInterval(() => {
+        const now = Date.now(); const delta = Math.floor((now - target.lastTick) / 1000);
+        if (delta >= 1) {
+            target.lastTick = now - ((now - target.lastTick) % 1000);
+            if (target.remainingTime > 0) {
                 target.remainingTime = Math.max(0, target.remainingTime - delta); 
                 updateGauge(target.student, target.remainingTime, target.totalTime); 
-                document.getElementById(`display-${id}`).innerText = formatTime(target.remainingTime); 
-                if (target.remainingTime === 0 && !target.isOver) {
-                    triggerAlarm(id);
-                    saveToStorage();
-                }
-            } else { 
-                if (!target.isOver) {
-                    triggerAlarm(id);
-                    saveToStorage();
-                }
-                target.overTime += delta; 
-                document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime); 
-                
-                if (target.overTime >= 3600) { finishSession(id); } 
-            } 
-        } 
+                document.getElementById(`display-${id}`).innerText = formatTime(target.remainingTime);
+                if (target.remainingTime === 0 && !target.isOver) triggerAlarm(id);
+            } else {
+                if (!target.isOver) triggerAlarm(id); 
+                target.overTime += delta; document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime);
+                if (target.overTime >= 300) { finishSession(id); }
+            }
+        }
     }, 250);
-
-    if (!isResume) {
-        saveToStorage(); 
-    }
     
-    updateStudentStatus(target.student); updateBoxUI(id);
+    updateStudentStatus(target.student); 
+    updateBoxUI(id);
 }
 
-function stopTimer(id) { if (timers[id].interval) { clearInterval(timers[id].interval); timers[id].interval = null; playUISound('stop'); updateStudentStatus(timers[id].student); updateBoxUI(id); saveToStorage(); } }
+function stopTimer(id) { 
+    if (timers[id].interval) { 
+        clearInterval(timers[id].interval); timers[id].interval = null; playUISound('stop'); 
+        updateStudentStatus(timers[id].student); 
+        updateBoxUI(id);
+    } 
+}
+
 function clearTime(id) { playUISound('cancel'); timers[id].remainingTime = 0; timers[id].totalTime = 0; timers[id].overTime = 0; timers[id].isOver = false; stopTimer(id); updateBoxUI(id); updateGauge(timers[id].student, 0, 1); saveToStorage(); }
 function cancelSession(id) { if(timers[id].student === "(empty)") return; playUISound('cancel'); const sn = timers[id].student; attendanceMap.delete(sn); resetTimerData(id, true); }
 function finishSession(id) { if(timers[id].student === "(empty)") return; playUISound('finish'); const sn = timers[id].student; finishedSet.add(sn); attendanceMap.delete(sn); logEvent(sn, 'finish', 'right', timers[id].overTime); resetTimerData(id, true); }
-function resetTimerData(id, resetUI) { stopTimer(id); const sn = timers[id].student; timers[id] = { student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" }; updateBoxUI(id); if (resetUI) updateStudentStatus(sn); saveToStorage(); }
-function adjustTime(id, sec) { playUISound('click'); timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); saveToStorage(); }
+function resetTimerData(id, resetUI) { stopTimer(id); const sn = timers[id].student; timers[id] = { student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }; updateBoxUI(id); if (resetUI) updateStudentStatus(sn); saveToStorage(); }
+function adjustTime(id, sec) { playUISound('click'); timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); }
 function updateGauge(studentName, remaining, total) { const btn = document.getElementById("btn-" + studentName); if (!btn) return; const gauge = btn.querySelector(".gauge-bg"); if (!gauge || total <= 0) return; gauge.style.width = (((total - remaining) / total) * 100) + "%"; }
 function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; }
 
@@ -479,89 +564,87 @@ function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:
 // ==========================================
 function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 function triggerAlarm(id) { timers[id].isOver = true; updateStudentStatus(timers[id].student); updateBoxUI(id); let melodyType = parseInt(document.getElementById("melodyType").value); playMelody(melodyType); playAlarmTTS(timers[id].student); }
-window.__tts_utterance_ko = null;
-window.__tts_utterance_en = null;
+window.__tts_queue = []; 
+if (window.speechSynthesis) { window.speechSynthesis.onvoiceschanged = function() { window.speechSynthesis.getVoices(); }; window.speechSynthesis.getVoices(); }
 
 function playAlarmTTS(studentName) {
     return new Promise(resolve => {
-        const voiceType = document.getElementById("ttsVoiceSelect").value; 
+        const voiceType = document.getElementById("ttsVoiceSelect").value;
         if (voiceType === "0" || !window.speechSynthesis) return resolve();
-        
         let voices = window.speechSynthesis.getVoices(); 
         if (voices.length === 0) { setTimeout(() => playAlarmTTS(studentName).then(resolve), 100); return; }
+
+        let u = new SpeechSynthesisUtterance(); u.volume = ttsVolume; u.rate = 1.05; u.pitch = 1.1; 
         
-        const getKoVoice = () => voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('InJoon')) || 
-                               voices.find(v => v.name.includes('Google') && v.lang.includes('ko')) || 
-                               voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성'))) || 
-                               voices.find(v => v.lang.includes('ko'));
-                               
-        const getEnVoice = () => voices.find(v => v.name.includes('Multilingual') && v.name.includes('Natural') && !v.name.includes('Male')) || 
-                               voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Male')) || 
-                               voices.find(v => v.name.includes('Google US English')) || 
-                               voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Female'))) || 
-                               voices.find(v => v.lang.includes('en'));
-
         if (voiceType === "1") { 
-            let u = new SpeechSynthesisUtterance(`${studentName}! ${studentName}!`); 
-            u.volume = ttsVolume; u.rate = 1.05; u.pitch = 1.1; u.lang = 'ko-KR'; 
-            let koVoice = getKoVoice();
+            u.text = `${studentName}! ${studentName}!`; u.lang = 'ko-KR'; 
+            let koVoice = voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('InJoon') && !v.name.includes('Guy') && !v.name.includes('Male')) || voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성'))) || voices.find(v => v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('남성')); 
             if (koVoice) u.voice = koVoice; 
-            
-            u.onend = resolve; u.onerror = resolve; 
-            window.__tts_utterance_ko = u; 
-            window.speechSynthesis.speak(u);
-            
-        } else if (voiceType === "2" || voiceType === "3") { 
-            let u1 = new SpeechSynthesisUtterance(`${studentName}!`);
-            u1.volume = ttsVolume; u1.rate = 1.05; u1.pitch = 1.1; u1.lang = 'ko-KR';
-            let koVoice = getKoVoice();
-            if (koVoice) u1.voice = koVoice;
-
-            let enText = voiceType === "2" ? "Let's go home!" : "Time's up! It's time to go home!";
-            let u2 = new SpeechSynthesisUtterance(enText);
-            u2.volume = ttsVolume; u2.rate = 1.05; u2.pitch = 1.1; u2.lang = 'en-US';
-            let enVoice = getEnVoice();
-            if (enVoice) u2.voice = enVoice;
-
-            u1.onend = () => { window.speechSynthesis.speak(u2); };
-            u2.onend = resolve;
-            
-            u1.onerror = resolve; u2.onerror = resolve;
-
-            window.__tts_utterance_ko = u1;
-            window.__tts_utterance_en = u2;
-
-            window.speechSynthesis.speak(u1);
+        } 
+        else if (voiceType === "2" || voiceType === "3") { 
+            u.text = voiceType === "2" ? `${studentName}! Let's go home!` : `${studentName}! Time's up! It's time to go home!`; u.lang = 'en-US'; 
+            let enVoice = voices.find(v => v.name.includes('Multilingual') && v.name.includes('Natural') && !v.name.includes('Guy') && !v.name.includes('Christopher') && !v.name.includes('Male')) || voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Guy') && !v.name.includes('Christopher') && !v.name.includes('Male')) || voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Google') || v.name.includes('Female'))) || voices.find(v => v.lang.includes('en') && !v.name.includes('Guy') && !v.name.includes('Christopher') && !v.name.includes('Male')); 
+            if (enVoice) u.voice = enVoice; 
         }
+        
+        u.onend = resolve; u.onerror = resolve; window.__tts_queue.push(u); window.speechSynthesis.speak(u);
     });
 }
-
-function previewMelody() { playUISound('click'); let melodyType = parseInt(document.getElementById("melodyType").value); playMelody(melodyType); }
-
-let previewDebounce = null;
-function previewRealtime(type) {
-    if (previewDebounce) clearTimeout(previewDebounce);
-    previewDebounce = setTimeout(() => {
-        if (type === 'ui') { playUISound('click'); } 
-        else if (type === 'tts') { playAlarmTTS("테스트"); } 
-        else if (type === 'alarm') { let melodyType = parseInt(document.getElementById("melodyType").value); playMelody(melodyType); }
-    }, 400); 
-}
-
 function playMelody(type) {
     return new Promise(resolve => {
-        initAudio(); const melodies = [ [523.25, 659.25, 783.99, 1046.50], [440, 554.37, 659.25, 880], [880, 880, 880, 880], [392, 329.63, 261.63], [261.63, 392, 523.25, 783.99], [1046.5, 0, 1046.5, 0, 1046.5], [1046.5, 1174.66, 1318.51, 1567.98], [130.81, 196.00], [587.33, 739.99, 880], [440, 349.23, 523.25, 493.88], [659.25, 523.25, 659.25, 523.25], [392, 440, 493.88, 523.25, 587.33], [1046.5, 783.99, 523.25], [440, 440, 0, 440, 440], [523.25, 392, 329.63, 261.63], [880, 659.25, 880, 659.25], [261.63, 329.63, 392, 523.25, 659.25], [783.99, 587.33, 440, 349.23], [1046.5, 1046.5, 1046.5, 1046.5, 1046.5], [523.25, 659.25, 587.33, 698.46, 659.25, 783.99], [330, 261, 293, 196, 0, 196, 293, 330, 261], [659, 622, 659, 622, 659, 494, 587, 523, 440], [523, 659, 784, 1046], [392, 330, 0, 392, 330], [1046, 0, 1046, 0, 1046, 0, 1046, 0, 1046] ];
+        initAudio();
+        const melodies = [ 
+            [523.25, 659.25, 783.99, 1046.50], [440, 554.37, 659.25, 880], [880, 880, 880, 880], [392, 329.63, 261.63], [261.63, 392, 523.25, 783.99], 
+            [1046.5, 0, 1046.5, 0, 1046.5], [1046.5, 1174.66, 1318.51, 1567.98], [130.81, 196.00], [587.33, 739.99, 880], [440, 349.23, 523.25, 493.88], 
+            [659.25, 523.25, 659.25, 523.25], [392, 440, 493.88, 523.25, 587.33], [1046.5, 783.99, 523.25], [440, 440, 0, 440, 440], [523.25, 392, 329.63, 261.63], 
+            [880, 659.25, 880, 659.25], [261.63, 329.63, 392, 523.25, 659.25], [783.99, 587.33, 440, 349.23], [1046.5, 1046.5, 1046.5, 1046.5, 1046.5], [523.25, 659.25, 587.33, 698.46, 659.25, 783.99],
+            [330, 261, 293, 196, 0, 196, 293, 330, 261], [659, 622, 659, 622, 659, 494, 587, 523, 440], [523, 659, 784, 1046], [392, 330, 0, 392, 330], [1046, 0, 1046, 0, 1046, 0, 1046, 0, 1046] 
+        ];
         let notes = melodies[type] || melodies[0]; let now = audioCtx.currentTime; let noteLength = 0.25; 
-        if(type === 2 || type === 5 || type === 13 || type === 18 || type === 24) noteLength = 0.15; if(type === 20 || type === 21 || type === 22) noteLength = 0.35;
-        notes.forEach((freq, i) => { if (freq === 0) return; let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain(); osc.type = (type === 2 || type === 9 || type === 18 || type === 24) ? 'square' : 'sine'; osc.frequency.value = freq; gain.gain.setValueAtTime(0, now + i*noteLength); gain.gain.linearRampToValueAtTime(alarmVolume, now + i*noteLength + 0.02); gain.gain.exponentialRampToValueAtTime(0.01, now + i*noteLength + noteLength); osc.connect(gain); gain.connect(audioCtx.destination); osc.start(now + i*noteLength); osc.stop(now + i*noteLength + noteLength); }); setTimeout(resolve, notes.length * noteLength * 1000 + 200);
+        if(type === 2 || type === 5 || type === 13 || type === 18 || type === 24) noteLength = 0.15;
+        if(type === 20 || type === 21 || type === 22) noteLength = 0.35;
+
+        notes.forEach((freq, i) => {
+            if (freq === 0) return;
+            let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
+            osc.type = (type === 2 || type === 9 || type === 18 || type === 24) ? 'square' : 'sine'; osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0, now + i*noteLength); gain.gain.linearRampToValueAtTime(alarmVolume, now + i*noteLength + 0.02); gain.gain.exponentialRampToValueAtTime(0.01, now + i*noteLength + noteLength);
+            osc.connect(gain); gain.connect(audioCtx.destination); osc.start(now + i*noteLength); osc.stop(now + i*noteLength + noteLength);
+        });
+        setTimeout(resolve, notes.length * noteLength * 1000 + 200);
     });
 }
 
 function playUISound(type) {
-    if (!audioCtx) initAudio(); const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain(); osc.connect(gain); gain.connect(audioCtx.destination); const now = audioCtx.currentTime; let v = uiVolume; if (v === 0) return;
-    if (type === 'tab' || type === 'click') { let st = parseInt(document.getElementById('uiSoundType').value) || 0; if(st === 0) { osc.type = 'sine'; osc.frequency.setValueAtTime(600, now); osc.frequency.exponentialRampToValueAtTime(800, now + 0.1); gain.gain.setValueAtTime(v * 0.15, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } else if(st === 1) { osc.type = 'sine'; osc.frequency.setValueAtTime(400, now); osc.frequency.exponentialRampToValueAtTime(450, now + 0.05); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05); osc.start(now); osc.stop(now + 0.05); } else if(st === 2) { osc.type = 'triangle'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.03); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.03); osc.start(now); osc.stop(now + 0.03); } else if(st === 3) { osc.type = 'sine'; osc.frequency.setValueAtTime(200, now); osc.frequency.exponentialRampToValueAtTime(150, now + 0.1); gain.gain.setValueAtTime(v * 0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } else if(st === 4) { osc.type = 'square'; osc.frequency.setValueAtTime(1200, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.08); gain.gain.setValueAtTime(v * 0.05, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.08); osc.start(now); osc.stop(now + 0.08); } else if(st === 5) { osc.type = 'sine'; osc.frequency.setValueAtTime(2000, now); osc.frequency.exponentialRampToValueAtTime(2500, now + 0.02); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.02); osc.start(now); osc.stop(now + 0.02); } else if(st === 6) { osc.type = 'triangle'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(200, now + 0.06); gain.gain.setValueAtTime(v * 0.25, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.06); osc.start(now); osc.stop(now + 0.06); } else if(st === 7) { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(850, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } else if(st === 8) { osc.type = 'sine'; osc.frequency.setValueAtTime(500, now); osc.frequency.exponentialRampToValueAtTime(300, now + 0.15); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); } else if(st === 9) { osc.type = 'sine'; osc.frequency.setValueAtTime(1500, now); osc.frequency.exponentialRampToValueAtTime(1800, now + 0.2); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2); osc.start(now); osc.stop(now + 0.2); } } 
-    else if (type === 'assign') { osc.type = 'triangle'; osc.frequency.setValueAtTime(880, now); gain.gain.setValueAtTime(v * 0.15, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); } else if (type === 'start') { osc.type = 'square'; osc.frequency.setValueAtTime(440, now); osc.frequency.linearRampToValueAtTime(880, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } else if (type === 'stop') { osc.type = 'square'; osc.frequency.setValueAtTime(880, now); osc.frequency.linearRampToValueAtTime(440, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } else if (type === 'finish') { osc.type = 'sine'; osc.frequency.setValueAtTime(1046.5, now); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3); osc.start(now); osc.stop(now + 0.3); } 
+    if (!audioCtx) initAudio();
+    const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination); const now = audioCtx.currentTime; let v = uiVolume; if (v === 0) return;
+    if (type === 'tab' || type === 'click') {
+        let st = parseInt(document.getElementById('uiSoundType').value) || 0;
+        if(st === 0) { osc.type = 'sine'; osc.frequency.setValueAtTime(600, now); osc.frequency.exponentialRampToValueAtTime(800, now + 0.1); gain.gain.setValueAtTime(v * 0.15, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
+        else if(st === 1) { osc.type = 'sine'; osc.frequency.setValueAtTime(400, now); osc.frequency.exponentialRampToValueAtTime(450, now + 0.05); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05); osc.start(now); osc.stop(now + 0.05); }
+        else if(st === 2) { osc.type = 'triangle'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.03); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.03); osc.start(now); osc.stop(now + 0.03); }
+        else if(st === 3) { osc.type = 'sine'; osc.frequency.setValueAtTime(200, now); osc.frequency.exponentialRampToValueAtTime(150, now + 0.1); gain.gain.setValueAtTime(v * 0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
+        else if(st === 4) { osc.type = 'square'; osc.frequency.setValueAtTime(1200, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.08); gain.gain.setValueAtTime(v * 0.05, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.08); osc.start(now); osc.stop(now + 0.08); }
+        else if(st === 5) { osc.type = 'sine'; osc.frequency.setValueAtTime(2000, now); osc.frequency.exponentialRampToValueAtTime(2500, now + 0.02); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.02); osc.start(now); osc.stop(now + 0.02); }
+        else if(st === 6) { osc.type = 'triangle'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(200, now + 0.06); gain.gain.setValueAtTime(v * 0.25, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.06); osc.start(now); osc.stop(now + 0.06); }
+        else if(st === 7) { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(850, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
+        else if(st === 8) { osc.type = 'sine'; osc.frequency.setValueAtTime(500, now); osc.frequency.exponentialRampToValueAtTime(300, now + 0.15); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); }
+        else if(st === 9) { osc.type = 'sine'; osc.frequency.setValueAtTime(1500, now); osc.frequency.exponentialRampToValueAtTime(1800, now + 0.2); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2); osc.start(now); osc.stop(now + 0.2); }
+    } else if (type === 'assign') { osc.type = 'triangle'; osc.frequency.setValueAtTime(880, now); gain.gain.setValueAtTime(v * 0.15, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); } 
+    else if (type === 'start') { osc.type = 'square'; osc.frequency.setValueAtTime(440, now); osc.frequency.linearRampToValueAtTime(880, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } 
+    else if (type === 'stop') { osc.type = 'square'; osc.frequency.setValueAtTime(880, now); osc.frequency.linearRampToValueAtTime(440, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } 
+    else if (type === 'finish') { osc.type = 'sine'; osc.frequency.setValueAtTime(1046.5, now); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3); osc.start(now); osc.stop(now + 0.3); } 
     else if (type === 'cancel') { osc.type = 'sine'; osc.frequency.setValueAtTime(400, now); osc.frequency.exponentialRampToValueAtTime(150, now + 0.2); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2); osc.start(now); osc.stop(now + 0.2); }
+}
+
+let lastTestTime = 0; let ttsTimeout = null;
+function previewMelody() { playUISound('click'); let melodyType = parseInt(document.getElementById("melodyType").value); playMelody(melodyType); }
+function previewRealtime(type) {
+    const now = Date.now();
+    if (type === 'alarm') { if (now - lastTestTime > 150) { lastTestTime = now; initAudio(); let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain(); osc.type = 'sine'; osc.frequency.value = 880; gain.gain.value = alarmVolume; osc.connect(gain); gain.connect(audioCtx.destination); osc.start(audioCtx.currentTime); osc.stop(audioCtx.currentTime + 0.1); } } 
+    else if (type === 'ui') { if (now - lastTestTime > 150) { lastTestTime = now; playUISound('click'); } } 
+    else if (type === 'tts') { clearTimeout(ttsTimeout); ttsTimeout = setTimeout(() => { playAlarmTTS("Test"); }, 300); }
 }
 
 // ==========================================
@@ -574,35 +657,77 @@ function logEvent(student, type, side, overTime = 0) {
     renderLogs(); saveToStorage();
 }
 
+// ⭐ (수정됨) 기록 화면 렌더링 시 시간을 클릭 가능하도록 변경
 function renderLogs() { 
     const t = i18n[currentLang];
-    const renderItem = (item) => {
+    const renderItem = (item, index, side) => {
         if (typeof item === 'string') return `<div style="margin-bottom:8px; border-bottom:1px solid var(--border); padding-bottom:5px;">${item}</div>`;
         let actionText = "";
         if (item.type === 'start') actionText = `▶️ ${item.student} ${t.logStartWord}`;
         else if (item.type === 'finish') { const extraStr = item.overTime > 0 ? ` (+${formatTime(item.overTime)})` : ""; actionText = `🏁 ${item.student} ${t.logFinishWord}${extraStr}`; }
         else if (item.type === 'game') actionText = `🎉 <span style="color:var(--accent); font-weight:900;">[이벤트 당첨] ${item.student}</span>`;
-        return `<div style="margin-bottom:8px; border-bottom:1px solid var(--border); padding-bottom:5px;">[${item.time}] ${actionText}</div>`;
+        
+        // 클릭하면 수정 프롬프트가 뜨도록 span 태그 적용
+        return `<div style="margin-bottom:8px; border-bottom:1px solid var(--border); padding-bottom:5px;">[<span class="editable-log-time" onclick="editLogTime('${side}', ${index})" style="cursor:pointer; text-decoration:underline;" title="클릭하여 시간 수정">${item.time}</span>] ${actionText}</div>`;
     };
-    document.getElementById("log-left").innerHTML = logLeftItems.map(renderItem).join(''); document.getElementById("log-right").innerHTML = logRightItems.map(renderItem).join(''); 
+    
+    document.getElementById("log-left").innerHTML = logLeftItems.map((item, idx) => renderItem(item, idx, 'left')).join(''); 
+    document.getElementById("log-right").innerHTML = logRightItems.map((item, idx) => renderItem(item, idx, 'right')).join(''); 
 }
+
+// ⭐ (추가됨) 클릭한 시간 값을 직접 변경하는 함수
+window.editLogTime = function(side, index) {
+    const list = (side === 'left') ? logLeftItems : logRightItems;
+    const item = list[index];
+
+    if (!item || typeof item === 'string') return;
+
+    const newTime = prompt("수업 시작(또는 종료) 시간을 수정하시겠습니까?\n(형식: HH:MM)", item.time);
+
+    if (newTime !== null) {
+        // HH:MM 정규식 체크 (예: 14:30)
+        const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+        if (timeRegex.test(newTime)) {
+            item.time = newTime;
+            playUISound('click');
+            renderLogs();
+            saveToStorage();
+        } else {
+            alert("올바른 시간 형식(예: 14:30)으로 입력해주세요.");
+        }
+    }
+};
 
 function saveLogAction() { 
     const t = i18n[currentLang]; const now = new Date(); const dateString = `${now.getFullYear()}. ${now.getMonth()+1}. ${now.getDate()} (${t.days[now.getDay()]})`;
     const formatLogTxt = (item) => {
-        if(typeof item === 'string') return item; let actionText = "";
+        if(typeof item === 'string') return item;
+        let actionText = "";
         if (item.type === 'start') actionText = `▶️ ${item.student} ${t.logStartWord}`;
         else if (item.type === 'finish') actionText = `🏁 ${item.student} ${t.logFinishWord}${item.overTime > 0 ? ' (+'+formatTime(item.overTime)+')' : ''}`;
         else if (item.type === 'game') actionText = `🎉 [이벤트 당첨] ${item.student}`;
         return `[${item.time}] ${actionText}`;
     };
-    const leftTxt = logLeftItems.length > 0 ? logLeftItems.map(formatLogTxt).join('\n') : t.noRecords; const rightTxt = logRightItems.length > 0 ? logRightItems.map(formatLogTxt).join('\n') : t.noRecords;
+    const leftTxt = logLeftItems.length > 0 ? logLeftItems.map(formatLogTxt).join('\n') : t.noRecords;
+    const rightTxt = logRightItems.length > 0 ? logRightItems.map(formatLogTxt).join('\n') : t.noRecords;
     const logText = `=========================================\n🏫 Academy : ${academyName}\n📚 Class : ${className}\n📅 Date : ${dateString}\n=========================================\n\n--- ▶️ START ---\n${leftTxt}\n\n--- 🏁 FINISH ---\n${rightTxt}\n`;
     const blob = new Blob([logText], {type:'text/plain'}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); const fileNameDate = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`; a.download = `${academyName}_${className}_LOG_${fileNameDate}.txt`; a.click(); 
 }
 
-function askSoftReset() { const t = i18n[currentLang]; playUISound('click'); if(confirm(t.alertSoft)) { timers.forEach((t, i) => stopTimer(i)); timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0, startTimeStr: "" })); logLeftItems = []; logRightItems = []; attendanceMap.clear(); finishedSet.clear(); assignOrderCounter = 0; guestList = []; renderLogs(); for(let i=0; i<DESK_COUNT; i++) updateBoxUI(i); generateStudents(); saveToStorage(); alert(t.alertResetDone); } }
-function askFactoryReset() { const t = i18n[currentLang]; playUISound('click'); if(confirm(t.alertHard)) { localStorage.removeItem(STORAGE_KEY); alert(t.alertFactoryDone); location.reload(); } }
+function askSoftReset() { 
+    const t = i18n[currentLang]; playUISound('click'); 
+    if(confirm(t.alertSoft)) { 
+        timers.forEach((t, i) => stopTimer(i)); 
+        timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 })); 
+        logLeftItems = []; logRightItems = []; attendanceMap.clear(); finishedSet.clear(); assignOrderCounter = 0; guestList = [];
+        renderLogs(); for(let i=0; i<DESK_COUNT; i++) updateBoxUI(i); generateStudents(); saveToStorage(); alert(t.alertResetDone); 
+    } 
+}
+
+function askFactoryReset() { 
+    const t = i18n[currentLang]; playUISound('click'); 
+    if(confirm(t.alertHard)) { localStorage.removeItem(STORAGE_KEY); alert(t.alertFactoryDone); location.reload(); } 
+}
 
 // ==========================================
 // 9. LADDER & ROULETTE GAME LOGIC
@@ -612,7 +737,7 @@ let ladderRungs = [];
 let targetWinnerIndex = -1;
 let animReq;
 let isResultRevealed = false; 
-let isGameAnimating = false; 
+let isGameAnimating = false; // 공통 애니메이션 상태
 
 const ladderColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#6366f1', '#14b8a6', '#d946ef', '#eab308', '#0ea5e9', '#f43f5e'];
 
@@ -669,7 +794,10 @@ function stopLadderBGM() {
 function setupLadder() {
     playUISound('click');
     
-    if(animReq) { cancelAnimationFrame(animReq); animReq = null; }
+    if(animReq) {
+        cancelAnimationFrame(animReq);
+        animReq = null;
+    }
     stopLadderBGM();
     isGameAnimating = false;
 
@@ -797,13 +925,13 @@ function drawStaticLadder() {
 }
 
 function startLadderAnimation() {
-    playUISound('start');
+    playUISound('click');
     startLadderBGM(); 
     
     document.getElementById('btnStartLadder').style.display = 'none';
     document.getElementById('gameResult').innerHTML = "결과 확인 중...👀";
     isResultRevealed = true; 
-    isGameAnimating = true; 
+    isGameAnimating = true;
     
     if(animReq) cancelAnimationFrame(animReq);
     
@@ -941,7 +1069,6 @@ function startLadderAnimation() {
     
     animReq = requestAnimationFrame(drawFrame);
 }
-
 
 // ----------------------------------
 // ROULETTE LOGIC
@@ -1091,9 +1218,3 @@ function startRouletteAnimation() {
     }
     spin();
 }
-
-// 브라우저가 닫히거나 최소화될 때 타이머의 마지막 시간을 안전하게 저장
-window.addEventListener('beforeunload', () => saveToStorage());
-document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') saveToStorage();
-});
