@@ -37,11 +37,10 @@ let rouletteSpinning = false;
 let roulettePlayers = [];
 
 // ==========================================
-// ⭐ 추가된 기능: 시간 뱃지 & 예쁜 모달 팝업 디자인
+// ⭐ 디자인 요소 (시간 뱃지 및 모달)
 // ==========================================
 const customStyle = document.createElement('style');
 customStyle.innerHTML = `
-    /* 시간 표시 배지 (카드 우측 상단) */
     .start-time-badge {
         position: absolute;
         top: 4px;
@@ -67,7 +66,6 @@ customStyle.innerHTML = `
         font-weight: bold; 
     }
 
-    /* 🎨 세련된 시간 입력 모달창 디자인 */
     #custom-time-modal-overlay {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
         background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(5px);
@@ -91,7 +89,6 @@ customStyle.innerHTML = `
     .custom-time-modal h3 { 
         margin: 0 0 15px 0; color: var(--text-main, #333); font-size: 18px; font-weight: 900;
     }
-    /* 태블릿 시계 팝업을 띄우는 input[type="time"] */
     .custom-time-modal input[type="time"] {
         font-size: 32px; padding: 10px; border: 2px solid var(--accent, #2563eb);
         border-radius: 12px; width: 100%; text-align: center; margin-bottom: 20px;
@@ -108,7 +105,6 @@ customStyle.innerHTML = `
     .btn-modal-cancel:hover, .btn-modal-save:hover { filter: brightness(1.1); }
 `;
 document.head.appendChild(customStyle);
-
 
 const i18n = {
     en: {
@@ -162,6 +158,9 @@ const i18n = {
 window.onload = () => { loadData(); updateDateUI(); }; 
 setInterval(updateDateUI, 60000); 
 
+// ⭐ 만약 브라우저를 강제로 닫을 때도 확실하게 최신 시간을 저장하도록 이벤트 추가
+window.addEventListener('beforeunload', () => { saveToStorage(); });
+
 function updateDateUI() {
     const now = new Date(); const t = i18n[currentLang];
     const str = `${now.getFullYear()}. ${String(now.getMonth()+1).padStart(2,'0')}. ${String(now.getDate()).padStart(2,'0')} (${t.days[now.getDay()]})`;
@@ -176,7 +175,6 @@ function applyLanguage() {
     document.querySelectorAll(".editable-roster").forEach(el => { el.setAttribute("data-placeholder", t.placeholder); });
     updateDateUI(); generateStudents(); 
     for (let i = 0; i < DESK_COUNT; i++) updateBoxUI(i);
-
     renderLogs(); 
 }
 
@@ -286,6 +284,7 @@ function changeDeskCount() {
     DESK_COUNT = newCount; createInitialGrid(); saveToStorage();
 }
 
+// ⭐ 타이머 백그라운드 유지를 위해 isRunning 과 lastTick 도 저장
 function saveToStorage() {
     try {
         const studentsObj = { 
@@ -296,7 +295,10 @@ function saveToStorage() {
         const data = { 
             deskCount: DESK_COUNT, academyName: academyName, className: className, students: studentsObj, logLeftItems: logLeftItems, logRightItems: logRightItems, 
             attendance: Array.from(attendanceMap.entries()), finishedSet: Array.from(finishedSet), assignOrderCounter: assignOrderCounter, 
-            timerStates: timers.map(t => ({ student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, startTimeStr: t.startTimeStr })), 
+            timerStates: timers.map(t => ({ 
+                student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, startTimeStr: t.startTimeStr,
+                isRunning: t.interval !== null, lastTick: t.lastTick // 핵심: 끄거나 닫을 때의 상태 저장
+            })), 
             vols: { a: alarmVolume, t: ttsVolume, u: uiVolume, ttsVoice: document.getElementById("ttsVoiceSelect").value, melody: document.getElementById("melodyType").value, uiType: document.getElementById("uiSoundType").value }, 
             theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang,
             customStudentOrder: customStudentOrder, guestList: guestList
@@ -334,7 +336,25 @@ function loadData() {
             logLeftItems = data.logLeftItems || []; logRightItems = data.logRightItems || []; 
             attendanceMap = new Map(data.attendance || []); finishedSet = new Set(data.finishedSet || []); assignOrderCounter = data.assignOrderCounter || 0; 
             
-            timers = data.timerStates ? data.timerStates.map(ts => ({ ...ts, interval: null, lastTick: 0 })) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
+            // ⭐ 타이머 복구: 저장된 타이머가 닫혀있던 시간만큼 계산하여 빼줍니다.
+            timers = data.timerStates ? data.timerStates.map(ts => {
+                let t = { ...ts, interval: null, lastTick: ts.lastTick || 0 };
+                if (ts.isRunning && t.lastTick > 0) {
+                    const now = Date.now();
+                    const delta = Math.floor((now - t.lastTick) / 1000); // 닫혀있던 초(seconds) 계산
+                    if (delta > 0) {
+                        if (t.remainingTime >= delta) {
+                            t.remainingTime -= delta;
+                        } else {
+                            t.overTime += (delta - t.remainingTime);
+                            t.remainingTime = 0;
+                        }
+                    }
+                    t.lastTick = now - ((now - t.lastTick) % 1000); // 틱 동기화
+                }
+                return t;
+            }) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
+            
             while (timers.length < DESK_COUNT) { timers.push({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }); }
             if (timers.length > DESK_COUNT) { timers.length = DESK_COUNT; }
 
@@ -349,6 +369,16 @@ function loadData() {
             if(data.nameColor) { document.getElementById("nameColorSelect").value = data.nameColor; changeNameColor(); }
             
             applyLanguage(); createInitialGrid(); generateStudents(); renderLogs();
+            
+            // ⭐ 복구 로직: 로딩 완료 후, 백그라운드에서 돌고 있던 타이머를 자동으로 다시 실행
+            if (data.timerStates) {
+                data.timerStates.forEach((ts, idx) => {
+                    if (ts.isRunning && timers[idx].student !== "(empty)") {
+                        resumeTimer(idx);
+                    }
+                });
+            }
+
         } else {
             updateContentEditable("studentInput_PRE", []); updateContentEditable("studentInput_BASIC", []); updateContentEditable("studentInput_INTER", []); updateContentEditable("studentInput_ADV", []); updateContentEditable("studentInput_PREP", []);
             timers = Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
@@ -532,9 +562,7 @@ function updateStudentStatus(name) {
     }
 }
 
-// ==========================================
-// ⭐ 예쁜 시간 입력 모달 (팝업) 로직
-// ==========================================
+// ⭐ 모달(팝업) 기능
 let timePromptCallback = null;
 
 function showTimePrompt(title, defaultTime, callback) {
@@ -543,7 +571,6 @@ function showTimePrompt(title, defaultTime, callback) {
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'custom-time-modal-overlay';
-        // 뒷 배경 클릭 시 취소되게 처리
         overlay.onclick = (e) => { if(e.target === overlay) closeTimePrompt(false); };
         
         overlay.innerHTML = `
@@ -568,10 +595,7 @@ function showTimePrompt(title, defaultTime, callback) {
     document.getElementById('time-modal-input').value = defaultTime;
     timePromptCallback = callback;
     
-    // 모달창 띄우기 (애니메이션 적용)
-    requestAnimationFrame(() => {
-        overlay.classList.add('show');
-    });
+    requestAnimationFrame(() => { overlay.classList.add('show'); });
 }
 
 window.closeTimePrompt = function(isSave) {
@@ -586,7 +610,6 @@ window.closeTimePrompt = function(isSave) {
     timePromptCallback = null;
 }
 
-// ⭐ 기존 prompt() 를 모달창(showTimePrompt)으로 교체
 window.editActiveStartTime = function(name) {
     let tIdx = timers.findIndex(t => t.student === name);
     if(tIdx === -1) return;
@@ -708,6 +731,34 @@ function startTimer(id) {
                 target.overTime += delta; document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime);
                 if (target.overTime >= 300) { finishSession(id); }
             }
+            // ⭐ 1초마다 변경되는 시간을 백그라운드에 지속 저장
+            saveToStorage(); 
+        }
+    }, 250);
+    
+    updateStudentStatus(target.student); 
+    updateBoxUI(id);
+}
+
+// ⭐ 새로고침 이후에 백그라운드에서 다시 타이머를 이어받아 켜주는 함수
+function resumeTimer(id) {
+    const target = timers[id]; if (target.interval || target.student === "(empty)") return;
+    
+    target.interval = setInterval(() => {
+        const nowTick = Date.now(); const delta = Math.floor((nowTick - target.lastTick) / 1000);
+        if (delta >= 1) {
+            target.lastTick = nowTick - ((nowTick - target.lastTick) % 1000);
+            if (target.remainingTime > 0) {
+                target.remainingTime = Math.max(0, target.remainingTime - delta); 
+                updateGauge(target.student, target.remainingTime, target.totalTime); 
+                document.getElementById(`display-${id}`).innerText = formatTime(target.remainingTime);
+                if (target.remainingTime === 0 && !target.isOver) triggerAlarm(id);
+            } else {
+                if (!target.isOver) triggerAlarm(id); 
+                target.overTime += delta; document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime);
+                if (target.overTime >= 300) { finishSession(id); }
+            }
+            saveToStorage(); 
         }
     }, 250);
     
@@ -720,6 +771,7 @@ function stopTimer(id) {
         clearInterval(timers[id].interval); timers[id].interval = null; playUISound('stop'); 
         updateStudentStatus(timers[id].student); 
         updateBoxUI(id);
+        saveToStorage(); // 정지 상태도 저장되도록 추가
     } 
 }
 
@@ -728,7 +780,14 @@ function cancelSession(id) { if(timers[id].student === "(empty)") return; playUI
 function finishSession(id) { if(timers[id].student === "(empty)") return; playUISound('finish'); const sn = timers[id].student; finishedSet.add(sn); attendanceMap.delete(sn); logEvent(sn, 'finish', 'right', timers[id].overTime); resetTimerData(id, true); }
 
 function resetTimerData(id, resetUI) { stopTimer(id); const sn = timers[id].student; timers[id] = { student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }; updateBoxUI(id); if (resetUI) updateStudentStatus(sn); saveToStorage(); }
-function adjustTime(id, sec) { playUISound('click'); timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); }
+function adjustTime(id, sec) { 
+    playUISound('click'); 
+    timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); 
+    if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } 
+    if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } 
+    updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); 
+    saveToStorage(); // 수동 조작된 시간도 바로 저장되게 수정
+}
 function updateGauge(studentName, remaining, total) { const btn = document.getElementById("btn-" + studentName); if (!btn) return; const gauge = btn.querySelector(".gauge-bg"); if (!gauge || total <= 0) return; gauge.style.width = (((total - remaining) / total) * 100) + "%"; }
 function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; }
 
@@ -799,7 +858,7 @@ function playUISound(type) {
         else if(st === 2) { osc.type = 'triangle'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.03); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.03); osc.start(now); osc.stop(now + 0.03); }
         else if(st === 3) { osc.type = 'sine'; osc.frequency.setValueAtTime(200, now); osc.frequency.exponentialRampToValueAtTime(150, now + 0.1); gain.gain.setValueAtTime(v * 0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
         else if(st === 4) { osc.type = 'square'; osc.frequency.setValueAtTime(1200, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.08); gain.gain.setValueAtTime(v * 0.05, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.08); osc.start(now); osc.stop(now + 0.08); }
-        else if(st === 5) { osc.type = 'sine'; osc.frequency.setValueAtTime(2000, now); osc.frequency.exponentialRampToValueAtTime(2500, now + 0.02); gain.gain.setValueAtTime(v * 0.1, 모now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.02); osc.start(now); osc.stop(now + 0.02); }
+        else if(st === 5) { osc.type = 'sine'; osc.frequency.setValueAtTime(2000, now); osc.frequency.exponentialRampToValueAtTime(2500, now + 0.02); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.02); osc.start(now); osc.stop(now + 0.02); }
         else if(st === 6) { osc.type = 'triangle'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(200, now + 0.06); gain.gain.setValueAtTime(v * 0.25, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.06); osc.start(now); osc.stop(now + 0.06); }
         else if(st === 7) { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(850, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
         else if(st === 8) { osc.type = 'sine'; osc.frequency.setValueAtTime(500, now); osc.frequency.exponentialRampToValueAtTime(300, now + 0.15); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); }
@@ -847,7 +906,6 @@ function renderLogs() {
     document.getElementById("log-right").innerHTML = logRightItems.map((item, idx) => renderItem(item, idx, 'right')).join(''); 
 }
 
-// ⭐ (수정됨) 기록 화면에서 시간 클릭 시 모달창 호출
 window.editLogTime = function(side, index) {
     const list = (side === 'left') ? logLeftItems : logRightItems;
     const item = list[index];
@@ -859,7 +917,6 @@ window.editLogTime = function(side, index) {
     showTimePrompt(title, item.time, function(newTime) {
         item.time = newTime;
         
-        // 현재 수업 중인 학생의 시작 기록을 수정한 경우 카드 화면(뱃지)도 동기화
         if(item.type === 'start') {
             let tIdx = timers.findIndex(t => t.student === item.student);
             if(tIdx !== -1) timers[tIdx].startTimeStr = newTime;
