@@ -158,7 +158,7 @@ const i18n = {
 window.onload = () => { loadData(); updateDateUI(); }; 
 setInterval(updateDateUI, 60000); 
 
-// ⭐ 만약 브라우저를 강제로 닫을 때도 확실하게 최신 시간을 저장하도록 이벤트 추가
+// 브라우저 닫을 때 백그라운드 상태 강제 저장
 window.addEventListener('beforeunload', () => { saveToStorage(); });
 
 function updateDateUI() {
@@ -284,7 +284,6 @@ function changeDeskCount() {
     DESK_COUNT = newCount; createInitialGrid(); saveToStorage();
 }
 
-// ⭐ 타이머 백그라운드 유지를 위해 isRunning 과 lastTick 도 저장
 function saveToStorage() {
     try {
         const studentsObj = { 
@@ -297,7 +296,7 @@ function saveToStorage() {
             attendance: Array.from(attendanceMap.entries()), finishedSet: Array.from(finishedSet), assignOrderCounter: assignOrderCounter, 
             timerStates: timers.map(t => ({ 
                 student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, startTimeStr: t.startTimeStr,
-                isRunning: t.interval !== null, lastTick: t.lastTick // 핵심: 끄거나 닫을 때의 상태 저장
+                isRunning: t.interval !== null, lastTick: t.lastTick
             })), 
             vols: { a: alarmVolume, t: ttsVolume, u: uiVolume, ttsVoice: document.getElementById("ttsVoiceSelect").value, melody: document.getElementById("melodyType").value, uiType: document.getElementById("uiSoundType").value }, 
             theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang,
@@ -336,12 +335,12 @@ function loadData() {
             logLeftItems = data.logLeftItems || []; logRightItems = data.logRightItems || []; 
             attendanceMap = new Map(data.attendance || []); finishedSet = new Set(data.finishedSet || []); assignOrderCounter = data.assignOrderCounter || 0; 
             
-            // ⭐ 타이머 복구: 저장된 타이머가 닫혀있던 시간만큼 계산하여 빼줍니다.
+            // 타이머 백그라운드 시간 복구 계산
             timers = data.timerStates ? data.timerStates.map(ts => {
                 let t = { ...ts, interval: null, lastTick: ts.lastTick || 0 };
                 if (ts.isRunning && t.lastTick > 0) {
                     const now = Date.now();
-                    const delta = Math.floor((now - t.lastTick) / 1000); // 닫혀있던 초(seconds) 계산
+                    const delta = Math.floor((now - t.lastTick) / 1000); 
                     if (delta > 0) {
                         if (t.remainingTime >= delta) {
                             t.remainingTime -= delta;
@@ -350,7 +349,7 @@ function loadData() {
                             t.remainingTime = 0;
                         }
                     }
-                    t.lastTick = now - ((now - t.lastTick) % 1000); // 틱 동기화
+                    t.lastTick = now - ((now - t.lastTick) % 1000); 
                 }
                 return t;
             }) : Array.from({length: DESK_COUNT}, () => ({ student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }));
@@ -370,7 +369,7 @@ function loadData() {
             
             applyLanguage(); createInitialGrid(); generateStudents(); renderLogs();
             
-            // ⭐ 복구 로직: 로딩 완료 후, 백그라운드에서 돌고 있던 타이머를 자동으로 다시 실행
+            // 로딩 후 기존에 돌고 있던 타이머 재시작
             if (data.timerStates) {
                 data.timerStates.forEach((ts, idx) => {
                     if (ts.isRunning && timers[idx].student !== "(empty)") {
@@ -562,7 +561,7 @@ function updateStudentStatus(name) {
     }
 }
 
-// ⭐ 모달(팝업) 기능
+// ⭐ 커스텀 모달 시간 입력 창
 let timePromptCallback = null;
 
 function showTimePrompt(title, defaultTime, callback) {
@@ -731,8 +730,7 @@ function startTimer(id) {
                 target.overTime += delta; document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime);
                 if (target.overTime >= 300) { finishSession(id); }
             }
-            // ⭐ 1초마다 변경되는 시간을 백그라운드에 지속 저장
-            saveToStorage(); 
+            saveToStorage(); // 매 초마다 상태 저장
         }
     }, 250);
     
@@ -740,7 +738,7 @@ function startTimer(id) {
     updateBoxUI(id);
 }
 
-// ⭐ 새로고침 이후에 백그라운드에서 다시 타이머를 이어받아 켜주는 함수
+// ⭐ 페이지가 다시 로드되었을 때 기존 타이머를 이어받는 함수
 function resumeTimer(id) {
     const target = timers[id]; if (target.interval || target.student === "(empty)") return;
     
@@ -771,7 +769,7 @@ function stopTimer(id) {
         clearInterval(timers[id].interval); timers[id].interval = null; playUISound('stop'); 
         updateStudentStatus(timers[id].student); 
         updateBoxUI(id);
-        saveToStorage(); // 정지 상태도 저장되도록 추가
+        saveToStorage(); 
     } 
 }
 
@@ -786,13 +784,13 @@ function adjustTime(id, sec) {
     if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } 
     if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } 
     updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); 
-    saveToStorage(); // 수동 조작된 시간도 바로 저장되게 수정
+    saveToStorage(); 
 }
 function updateGauge(studentName, remaining, total) { const btn = document.getElementById("btn-" + studentName); if (!btn) return; const gauge = btn.querySelector(".gauge-bg"); if (!gauge || total <= 0) return; gauge.style.width = (((total - remaining) / total) * 100) + "%"; }
 function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; }
 
 // ==========================================
-// 7. AUDIO & TTS
+// 7. AUDIO & TTS (⭐ 크롬 고음질 음성 우선 탐색 로직 추가)
 // ==========================================
 function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 function triggerAlarm(id) { timers[id].isOver = true; updateStudentStatus(timers[id].student); updateBoxUI(id); let melodyType = parseInt(document.getElementById("melodyType").value); playMelody(melodyType); playAlarmTTS(timers[id].student); }
@@ -806,22 +804,35 @@ function playAlarmTTS(studentName) {
         let voices = window.speechSynthesis.getVoices(); 
         if (voices.length === 0) { setTimeout(() => playAlarmTTS(studentName).then(resolve), 100); return; }
 
+        // 크롬 꼬임 방지를 위해 큐 지우기
+        window.speechSynthesis.cancel();
+
         let u = new SpeechSynthesisUtterance(); u.volume = ttsVolume; u.rate = 1.05; u.pitch = 1.1; 
         
         if (voiceType === "1") { 
             u.text = `${studentName}! ${studentName}!`; u.lang = 'ko-KR'; 
-            let koVoice = voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('InJoon') && !v.name.includes('Guy') && !v.name.includes('Male')) || voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성'))) || voices.find(v => v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('남성')); 
+            let koVoice = voices.find(v => v.name.includes('Google') && v.lang.includes('ko')) ||
+                          voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('InJoon')) ||
+                          voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성') || v.name.includes('Heami'))) ||
+                          voices.find(v => v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('남성')) ||
+                          voices.find(v => v.lang.includes('ko'));
             if (koVoice) u.voice = koVoice; 
         } 
         else if (voiceType === "2" || voiceType === "3") { 
             u.text = voiceType === "2" ? `${studentName}! Let's go home!` : `${studentName}! Time's up! It's time to go home!`; u.lang = 'en-US'; 
-            let enVoice = voices.find(v => v.name.includes('Multilingual') && v.name.includes('Natural') && !v.name.includes('Guy') && !v.name.includes('Christopher') && !v.name.includes('Male')) || voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Guy') && !v.name.includes('Christopher') && !v.name.includes('Male')) || voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Google') || v.name.includes('Female'))) || voices.find(v => v.lang.includes('en') && !v.name.includes('Guy') && !v.name.includes('Christopher') && !v.name.includes('Male')); 
+            let enVoice = voices.find(v => v.name === 'Google US English') ||
+                          voices.find(v => v.name.includes('Google') && v.lang.includes('en')) ||
+                          voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Male') && !v.name.includes('Guy')) ||
+                          voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Female'))) ||
+                          voices.find(v => v.lang.includes('en') && !v.name.includes('Male') && !v.name.includes('Guy')) ||
+                          voices.find(v => v.lang.includes('en'));
             if (enVoice) u.voice = enVoice; 
         }
         
         u.onend = resolve; u.onerror = resolve; window.__tts_queue.push(u); window.speechSynthesis.speak(u);
     });
 }
+
 function playMelody(type) {
     return new Promise(resolve => {
         initAudio();
