@@ -36,10 +36,79 @@ let rouletteAngle = 0;
 let rouletteSpinning = false;
 let roulettePlayers = [];
 
-// 시간 수정 기능용 CSS 자동 주입
-const logTimeStyle = document.createElement('style');
-logTimeStyle.innerHTML = `.editable-log-time:hover { color: var(--accent); font-weight: bold; }`;
-document.head.appendChild(logTimeStyle);
+// ==========================================
+// ⭐ 추가된 기능: 시간 뱃지 & 예쁜 모달 팝업 디자인
+// ==========================================
+const customStyle = document.createElement('style');
+customStyle.innerHTML = `
+    /* 시간 표시 배지 (카드 우측 상단) */
+    .start-time-badge {
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        background: #2563eb;
+        border: 2px solid #60a5fa;
+        color: white;
+        font-size: 14px; 
+        font-weight: 900; 
+        padding: 4px 8px; 
+        border-radius: 8px; 
+        cursor: pointer;
+        z-index: 10;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.4); 
+        transition: background 0.2s, transform 0.1s;
+    }
+    .start-time-badge:hover {
+        background: #1d4ed8;
+        transform: scale(1.05);
+    }
+    .editable-log-time:hover { 
+        color: var(--accent); 
+        font-weight: bold; 
+    }
+
+    /* 🎨 세련된 시간 입력 모달창 디자인 */
+    #custom-time-modal-overlay {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(5px);
+        display: flex; justify-content: center; align-items: center; z-index: 9999;
+        opacity: 0; pointer-events: none; transition: opacity 0.2s ease-in-out;
+    }
+    #custom-time-modal-overlay.show {
+        opacity: 1; pointer-events: auto;
+    }
+    .custom-time-modal {
+        background: var(--bg-card, #ffffff); 
+        padding: 25px; border-radius: 16px; 
+        box-shadow: 0 15px 35px rgba(0,0,0,0.4);
+        text-align: center; width: 280px;
+        transform: translateY(20px) scale(0.95); transition: all 0.2s ease-out;
+        border: 1px solid var(--border, #ccc);
+    }
+    #custom-time-modal-overlay.show .custom-time-modal {
+        transform: translateY(0) scale(1);
+    }
+    .custom-time-modal h3 { 
+        margin: 0 0 15px 0; color: var(--text-main, #333); font-size: 18px; font-weight: 900;
+    }
+    /* 태블릿 시계 팝업을 띄우는 input[type="time"] */
+    .custom-time-modal input[type="time"] {
+        font-size: 32px; padding: 10px; border: 2px solid var(--accent, #2563eb);
+        border-radius: 12px; width: 100%; text-align: center; margin-bottom: 20px;
+        font-family: inherit; font-weight: bold; background: var(--bg-body, #fff);
+        color: var(--text-main, #000); outline: none; box-sizing: border-box;
+    }
+    .custom-time-modal .modal-btns { display: flex; gap: 10px; }
+    .custom-time-modal .modal-btns button {
+        flex: 1; padding: 12px; border: none; border-radius: 10px; font-weight: bold; 
+        font-size: 15px; cursor: pointer; transition: filter 0.2s;
+    }
+    .btn-modal-cancel { background: var(--border, #ddd); color: var(--text-main, #333); }
+    .btn-modal-save { background: var(--accent, #2563eb); color: #fff; }
+    .btn-modal-cancel:hover, .btn-modal-save:hover { filter: brightness(1.1); }
+`;
+document.head.appendChild(customStyle);
+
 
 const i18n = {
     en: {
@@ -227,7 +296,7 @@ function saveToStorage() {
         const data = { 
             deskCount: DESK_COUNT, academyName: academyName, className: className, students: studentsObj, logLeftItems: logLeftItems, logRightItems: logRightItems, 
             attendance: Array.from(attendanceMap.entries()), finishedSet: Array.from(finishedSet), assignOrderCounter: assignOrderCounter, 
-            timerStates: timers.map(t => ({ student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver })), 
+            timerStates: timers.map(t => ({ student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, startTimeStr: t.startTimeStr })), 
             vols: { a: alarmVolume, t: ttsVolume, u: uiVolume, ttsVoice: document.getElementById("ttsVoiceSelect").value, melody: document.getElementById("melodyType").value, uiType: document.getElementById("uiSoundType").value }, 
             theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang,
             customStudentOrder: customStudentOrder, guestList: guestList
@@ -412,7 +481,17 @@ function updateStudentStatus(name) {
     let badge = btn.querySelector(".status-badge");
     if (!badge) { badge = document.createElement("div"); badge.className = "status-badge"; btn.appendChild(badge); }
     badge.style.background = ""; badge.style.color = "";
+    badge.style.display = ""; 
     
+    let timeBadge = btn.querySelector(".start-time-badge");
+    if (!timeBadge) { 
+        timeBadge = document.createElement("div"); 
+        timeBadge.className = "start-time-badge"; 
+        timeBadge.title = "클릭하여 시작 시간 수정";
+        btn.appendChild(timeBadge); 
+    }
+    timeBadge.style.display = "none"; 
+
     const gridUnassigned = document.getElementById("grid-unassigned");
     const gridActive = document.getElementById("grid-active");
     const gridFinished = document.getElementById("grid-finished");
@@ -427,8 +506,19 @@ function updateStudentStatus(name) {
                 btn.classList.add("alarm-blink", "attended"); badge.innerHTML = tLang.statusTimeUp; 
                 badge.style.background = "var(--brand-danger)"; badge.style.color = "white"; 
             } else if (t.interval) { 
-                btn.classList.add("playing", "attended"); badge.innerHTML = tLang.statusPlaying; 
-                badge.style.background = "var(--accent)"; badge.style.color = "#fff"; 
+                btn.classList.add("playing", "attended"); 
+                
+                badge.style.display = "none"; 
+                
+                if(t.startTimeStr) {
+                    timeBadge.innerHTML = `⏰ ${t.startTimeStr}`;
+                    timeBadge.style.display = "block";
+                    timeBadge.onclick = (e) => {
+                        e.stopPropagation();
+                        editActiveStartTime(name);
+                    };
+                }
+
             } else { 
                 btn.classList.add("attended"); badge.innerHTML = tLang.statusAssign; 
                 badge.style.background = "var(--brand-success)"; badge.style.color = "white"; 
@@ -436,10 +526,84 @@ function updateStudentStatus(name) {
             gridActive.appendChild(btn);
         } else { 
             badge.remove(); 
+            timeBadge.remove(); 
             gridUnassigned.appendChild(btn);
         }
     }
 }
+
+// ==========================================
+// ⭐ 예쁜 시간 입력 모달 (팝업) 로직
+// ==========================================
+let timePromptCallback = null;
+
+function showTimePrompt(title, defaultTime, callback) {
+    playUISound('click');
+    let overlay = document.getElementById('custom-time-modal-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'custom-time-modal-overlay';
+        // 뒷 배경 클릭 시 취소되게 처리
+        overlay.onclick = (e) => { if(e.target === overlay) closeTimePrompt(false); };
+        
+        overlay.innerHTML = `
+            <div class="custom-time-modal">
+                <h3 id="time-modal-title">시간 수정</h3>
+                <input type="time" id="time-modal-input" required>
+                <div class="modal-btns">
+                    <button class="btn-modal-cancel" onclick="closeTimePrompt(false)">취소</button>
+                    <button class="btn-modal-save" onclick="closeTimePrompt(true)">저장</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+    
+    document.getElementById('time-modal-title').innerText = title;
+    
+    if(!defaultTime) {
+        const now = new Date();
+        defaultTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    }
+    document.getElementById('time-modal-input').value = defaultTime;
+    timePromptCallback = callback;
+    
+    // 모달창 띄우기 (애니메이션 적용)
+    requestAnimationFrame(() => {
+        overlay.classList.add('show');
+    });
+}
+
+window.closeTimePrompt = function(isSave) {
+    const overlay = document.getElementById('custom-time-modal-overlay');
+    overlay.classList.remove('show');
+    playUISound('click');
+    
+    if (isSave) {
+        const newTime = document.getElementById('time-modal-input').value;
+        if (timePromptCallback && newTime) timePromptCallback(newTime);
+    }
+    timePromptCallback = null;
+}
+
+// ⭐ 기존 prompt() 를 모달창(showTimePrompt)으로 교체
+window.editActiveStartTime = function(name) {
+    let tIdx = timers.findIndex(t => t.student === name);
+    if(tIdx === -1) return;
+    let t = timers[tIdx];
+
+    showTimePrompt(`[${name}] 수업 시작 시간`, t.startTimeStr, function(newTime) {
+        t.startTimeStr = newTime; 
+        
+        let logItem = logLeftItems.find(item => item.student === name && item.type === 'start');
+        if(logItem) {
+            logItem.time = newTime;
+            renderLogs();
+        }
+        updateStudentStatus(name); 
+        saveToStorage();
+    });
+};
 
 function createInitialGrid() {
     const grid = document.getElementById("grid"); grid.innerHTML = "";
@@ -520,12 +684,20 @@ function handleDropOnTimer(name, targetIdx, fromIdx) {
 
 function startTimer(id) {
     const target = timers[id]; if (target.interval || target.student === "(empty)") return;
-    initAudio(); playUISound('start'); logEvent(target.student, 'start', 'left'); target.lastTick = Date.now();
+    initAudio(); playUISound('start'); 
+    
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    target.startTimeStr = timeStr;
+    
+    logEvent(target.student, 'start', 'left', 0, timeStr); 
+    
+    target.lastTick = Date.now();
     
     target.interval = setInterval(() => {
-        const now = Date.now(); const delta = Math.floor((now - target.lastTick) / 1000);
+        const nowTick = Date.now(); const delta = Math.floor((nowTick - target.lastTick) / 1000);
         if (delta >= 1) {
-            target.lastTick = now - ((now - target.lastTick) % 1000);
+            target.lastTick = nowTick - ((nowTick - target.lastTick) % 1000);
             if (target.remainingTime > 0) {
                 target.remainingTime = Math.max(0, target.remainingTime - delta); 
                 updateGauge(target.student, target.remainingTime, target.totalTime); 
@@ -554,6 +726,7 @@ function stopTimer(id) {
 function clearTime(id) { playUISound('cancel'); timers[id].remainingTime = 0; timers[id].totalTime = 0; timers[id].overTime = 0; timers[id].isOver = false; stopTimer(id); updateBoxUI(id); updateGauge(timers[id].student, 0, 1); saveToStorage(); }
 function cancelSession(id) { if(timers[id].student === "(empty)") return; playUISound('cancel'); const sn = timers[id].student; attendanceMap.delete(sn); resetTimerData(id, true); }
 function finishSession(id) { if(timers[id].student === "(empty)") return; playUISound('finish'); const sn = timers[id].student; finishedSet.add(sn); attendanceMap.delete(sn); logEvent(sn, 'finish', 'right', timers[id].overTime); resetTimerData(id, true); }
+
 function resetTimerData(id, resetUI) { stopTimer(id); const sn = timers[id].student; timers[id] = { student: "(empty)", remainingTime: 0, totalTime: 0, overTime: 0, interval: null, isOver: false, lastTick: 0 }; updateBoxUI(id); if (resetUI) updateStudentStatus(sn); saveToStorage(); }
 function adjustTime(id, sec) { playUISound('click'); timers[id].remainingTime = Math.max(0, timers[id].remainingTime + sec); if(timers[id].remainingTime > timers[id].totalTime || timers[id].totalTime === 0) { timers[id].totalTime = timers[id].remainingTime; } if(timers[id].remainingTime > 0) { timers[id].isOver = false; timers[id].overTime = 0; updateStudentStatus(timers[id].student); } updateBoxUI(id); updateGauge(timers[id].student, timers[id].remainingTime, timers[id].totalTime); }
 function updateGauge(studentName, remaining, total) { const btn = document.getElementById("btn-" + studentName); if (!btn) return; const gauge = btn.querySelector(".gauge-bg"); if (!gauge || total <= 0) return; gauge.style.width = (((total - remaining) / total) * 100) + "%"; }
@@ -626,7 +799,7 @@ function playUISound(type) {
         else if(st === 2) { osc.type = 'triangle'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.03); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.03); osc.start(now); osc.stop(now + 0.03); }
         else if(st === 3) { osc.type = 'sine'; osc.frequency.setValueAtTime(200, now); osc.frequency.exponentialRampToValueAtTime(150, now + 0.1); gain.gain.setValueAtTime(v * 0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
         else if(st === 4) { osc.type = 'square'; osc.frequency.setValueAtTime(1200, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.08); gain.gain.setValueAtTime(v * 0.05, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.08); osc.start(now); osc.stop(now + 0.08); }
-        else if(st === 5) { osc.type = 'sine'; osc.frequency.setValueAtTime(2000, now); osc.frequency.exponentialRampToValueAtTime(2500, now + 0.02); gain.gain.setValueAtTime(v * 0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.02); osc.start(now); osc.stop(now + 0.02); }
+        else if(st === 5) { osc.type = 'sine'; osc.frequency.setValueAtTime(2000, now); osc.frequency.exponentialRampToValueAtTime(2500, now + 0.02); gain.gain.setValueAtTime(v * 0.1, 모now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.02); osc.start(now); osc.stop(now + 0.02); }
         else if(st === 6) { osc.type = 'triangle'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(200, now + 0.06); gain.gain.setValueAtTime(v * 0.25, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.06); osc.start(now); osc.stop(now + 0.06); }
         else if(st === 7) { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(850, now + 0.1); gain.gain.setValueAtTime(v * 0.08, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
         else if(st === 8) { osc.type = 'sine'; osc.frequency.setValueAtTime(500, now); osc.frequency.exponentialRampToValueAtTime(300, now + 0.15); gain.gain.setValueAtTime(v * 0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); }
@@ -650,14 +823,14 @@ function previewRealtime(type) {
 // ==========================================
 // 8. LOGGING & UTILITIES
 // ==========================================
-function logEvent(student, type, side, overTime = 0) {
-    const now = new Date(); const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+function logEvent(student, type, side, overTime = 0, forceTime = null) {
+    const now = new Date(); 
+    const timeStr = forceTime || `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
     const obj = { time: timeStr, student: student, type: type, overTime: overTime };
     if (side === 'left') logLeftItems.unshift(obj); else logRightItems.unshift(obj);
     renderLogs(); saveToStorage();
 }
 
-// ⭐ (수정됨) 기록 화면 렌더링 시 시간을 클릭 가능하도록 변경
 function renderLogs() { 
     const t = i18n[currentLang];
     const renderItem = (item, index, side) => {
@@ -667,7 +840,6 @@ function renderLogs() {
         else if (item.type === 'finish') { const extraStr = item.overTime > 0 ? ` (+${formatTime(item.overTime)})` : ""; actionText = `🏁 ${item.student} ${t.logFinishWord}${extraStr}`; }
         else if (item.type === 'game') actionText = `🎉 <span style="color:var(--accent); font-weight:900;">[이벤트 당첨] ${item.student}</span>`;
         
-        // 클릭하면 수정 프롬프트가 뜨도록 span 태그 적용
         return `<div style="margin-bottom:8px; border-bottom:1px solid var(--border); padding-bottom:5px;">[<span class="editable-log-time" onclick="editLogTime('${side}', ${index})" style="cursor:pointer; text-decoration:underline;" title="클릭하여 시간 수정">${item.time}</span>] ${actionText}</div>`;
     };
     
@@ -675,27 +847,28 @@ function renderLogs() {
     document.getElementById("log-right").innerHTML = logRightItems.map((item, idx) => renderItem(item, idx, 'right')).join(''); 
 }
 
-// ⭐ (추가됨) 클릭한 시간 값을 직접 변경하는 함수
+// ⭐ (수정됨) 기록 화면에서 시간 클릭 시 모달창 호출
 window.editLogTime = function(side, index) {
     const list = (side === 'left') ? logLeftItems : logRightItems;
     const item = list[index];
 
     if (!item || typeof item === 'string') return;
 
-    const newTime = prompt("수업 시작(또는 종료) 시간을 수정하시겠습니까?\n(형식: HH:MM)", item.time);
+    let title = item.type === 'start' ? `[${item.student}] 시작 시간 수정` : `[${item.student}] 종료 시간 수정`;
 
-    if (newTime !== null) {
-        // HH:MM 정규식 체크 (예: 14:30)
-        const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
-        if (timeRegex.test(newTime)) {
-            item.time = newTime;
-            playUISound('click');
-            renderLogs();
-            saveToStorage();
-        } else {
-            alert("올바른 시간 형식(예: 14:30)으로 입력해주세요.");
+    showTimePrompt(title, item.time, function(newTime) {
+        item.time = newTime;
+        
+        // 현재 수업 중인 학생의 시작 기록을 수정한 경우 카드 화면(뱃지)도 동기화
+        if(item.type === 'start') {
+            let tIdx = timers.findIndex(t => t.student === item.student);
+            if(tIdx !== -1) timers[tIdx].startTimeStr = newTime;
+            updateStudentStatus(item.student);
         }
-    }
+        
+        renderLogs();
+        saveToStorage();
+    });
 };
 
 function saveLogAction() { 
@@ -737,7 +910,7 @@ let ladderRungs = [];
 let targetWinnerIndex = -1;
 let animReq;
 let isResultRevealed = false; 
-let isGameAnimating = false; // 공통 애니메이션 상태
+let isGameAnimating = false;
 
 const ladderColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#6366f1', '#14b8a6', '#d946ef', '#eab308', '#0ea5e9', '#f43f5e'];
 
