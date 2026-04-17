@@ -158,7 +158,6 @@ const i18n = {
 window.onload = () => { loadData(); updateDateUI(); }; 
 setInterval(updateDateUI, 60000); 
 
-// 브라우저 닫을 때 백그라운드 상태 강제 저장
 window.addEventListener('beforeunload', () => { saveToStorage(); });
 
 function updateDateUI() {
@@ -296,7 +295,7 @@ function saveToStorage() {
             attendance: Array.from(attendanceMap.entries()), finishedSet: Array.from(finishedSet), assignOrderCounter: assignOrderCounter, 
             timerStates: timers.map(t => ({ 
                 student: t.student, remainingTime: t.remainingTime, totalTime: t.totalTime, overTime: t.overTime, isOver: t.isOver, startTimeStr: t.startTimeStr,
-                isRunning: t.interval !== null, lastTick: t.lastTick
+                isRunning: t.interval !== null, lastTick: t.lastTick 
             })), 
             vols: { a: alarmVolume, t: ttsVolume, u: uiVolume, ttsVoice: document.getElementById("ttsVoiceSelect").value, melody: document.getElementById("melodyType").value, uiType: document.getElementById("uiSoundType").value }, 
             theme: currentTheme, nameColor: document.getElementById("nameColorSelect").value, language: currentLang,
@@ -335,7 +334,6 @@ function loadData() {
             logLeftItems = data.logLeftItems || []; logRightItems = data.logRightItems || []; 
             attendanceMap = new Map(data.attendance || []); finishedSet = new Set(data.finishedSet || []); assignOrderCounter = data.assignOrderCounter || 0; 
             
-            // 타이머 백그라운드 시간 복구 계산
             timers = data.timerStates ? data.timerStates.map(ts => {
                 let t = { ...ts, interval: null, lastTick: ts.lastTick || 0 };
                 if (ts.isRunning && t.lastTick > 0) {
@@ -369,7 +367,6 @@ function loadData() {
             
             applyLanguage(); createInitialGrid(); generateStudents(); renderLogs();
             
-            // 로딩 후 기존에 돌고 있던 타이머 재시작
             if (data.timerStates) {
                 data.timerStates.forEach((ts, idx) => {
                     if (ts.isRunning && timers[idx].student !== "(empty)") {
@@ -730,7 +727,7 @@ function startTimer(id) {
                 target.overTime += delta; document.getElementById(`display-${id}`).innerText = "+" + formatTime(target.overTime);
                 if (target.overTime >= 300) { finishSession(id); }
             }
-            saveToStorage(); // 매 초마다 상태 저장
+            saveToStorage(); 
         }
     }, 250);
     
@@ -738,7 +735,6 @@ function startTimer(id) {
     updateBoxUI(id);
 }
 
-// ⭐ 페이지가 다시 로드되었을 때 기존 타이머를 이어받는 함수
 function resumeTimer(id) {
     const target = timers[id]; if (target.interval || target.student === "(empty)") return;
     
@@ -790,7 +786,7 @@ function updateGauge(studentName, remaining, total) { const btn = document.getEl
 function formatTime(t) { return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; }
 
 // ==========================================
-// 7. AUDIO & TTS (⭐ 크롬 고음질 음성 우선 탐색 로직 추가)
+// 7. AUDIO & TTS (⭐ 이름과 영어를 분리하여 순차 재생)
 // ==========================================
 function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
 function triggerAlarm(id) { timers[id].isOver = true; updateStudentStatus(timers[id].student); updateBoxUI(id); let melodyType = parseInt(document.getElementById("melodyType").value); playMelody(melodyType); playAlarmTTS(timers[id].student); }
@@ -804,32 +800,50 @@ function playAlarmTTS(studentName) {
         let voices = window.speechSynthesis.getVoices(); 
         if (voices.length === 0) { setTimeout(() => playAlarmTTS(studentName).then(resolve), 100); return; }
 
-        // 크롬 꼬임 방지를 위해 큐 지우기
-        window.speechSynthesis.cancel();
+        window.speechSynthesis.cancel(); // 기존에 꼬여있는 큐 비우기
 
-        let u = new SpeechSynthesisUtterance(); u.volume = ttsVolume; u.rate = 1.05; u.pitch = 1.1; 
-        
+        // 한국어 음성 찾는 헬퍼 함수
+        const getKoVoice = () => voices.find(v => v.name.includes('Google') && v.lang.includes('ko')) ||
+                      voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('InJoon')) ||
+                      voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성') || v.name.includes('Heami'))) ||
+                      voices.find(v => v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('남성')) ||
+                      voices.find(v => v.lang.includes('ko'));
+
+        // 영어 원어민 음성 찾는 헬퍼 함수
+        const getEnVoice = () => voices.find(v => v.name === 'Google US English') ||
+                      voices.find(v => v.name.includes('Google') && v.lang.includes('en')) ||
+                      voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Male') && !v.name.includes('Guy')) ||
+                      voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Female'))) ||
+                      voices.find(v => v.lang.includes('en') && !v.name.includes('Male') && !v.name.includes('Guy')) ||
+                      voices.find(v => v.lang.includes('en'));
+
         if (voiceType === "1") { 
-            u.text = `${studentName}! ${studentName}!`; u.lang = 'ko-KR'; 
-            let koVoice = voices.find(v => v.name.includes('Google') && v.lang.includes('ko')) ||
-                          voices.find(v => v.name.includes('Natural') && v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('InJoon')) ||
-                          voices.find(v => v.lang.includes('ko-KR') && (v.name.includes('Female') || v.name.includes('여성') || v.name.includes('Heami'))) ||
-                          voices.find(v => v.lang.includes('ko') && !v.name.includes('Male') && !v.name.includes('남성')) ||
-                          voices.find(v => v.lang.includes('ko'));
+            let u = new SpeechSynthesisUtterance(`${studentName}! ${studentName}!`); 
+            u.volume = ttsVolume; u.rate = 1.05; u.pitch = 1.1; u.lang = 'ko-KR'; 
+            let koVoice = getKoVoice();
             if (koVoice) u.voice = koVoice; 
+            u.onend = resolve; u.onerror = resolve; 
+            window.__tts_queue.push(u); window.speechSynthesis.speak(u);
         } 
         else if (voiceType === "2" || voiceType === "3") { 
-            u.text = voiceType === "2" ? `${studentName}! Let's go home!` : `${studentName}! Time's up! It's time to go home!`; u.lang = 'en-US'; 
-            let enVoice = voices.find(v => v.name === 'Google US English') ||
-                          voices.find(v => v.name.includes('Google') && v.lang.includes('en')) ||
-                          voices.find(v => v.name.includes('Natural') && v.lang.includes('en') && !v.name.includes('Male') && !v.name.includes('Guy')) ||
-                          voices.find(v => v.lang.includes('en-US') && (v.name.includes('Zira') || v.name.includes('Samantha') || v.name.includes('Female'))) ||
-                          voices.find(v => v.lang.includes('en') && !v.name.includes('Male') && !v.name.includes('Guy')) ||
-                          voices.find(v => v.lang.includes('en'));
-            if (enVoice) u.voice = enVoice; 
+            // ⭐ 핵심 로직: 이름(한국어)과 영어 문장을 쪼개서 연속으로 읽게 만듭니다.
+            let u1 = new SpeechSynthesisUtterance(`${studentName}!`);
+            u1.volume = ttsVolume; u1.rate = 1.05; u1.pitch = 1.1; u1.lang = 'ko-KR';
+            let koVoice = getKoVoice();
+            if (koVoice) u1.voice = koVoice;
+            
+            let phrase = voiceType === "2" ? "Let's go home!" : "Time's up! It's time to go home!";
+            let u2 = new SpeechSynthesisUtterance(phrase);
+            u2.volume = ttsVolume; u2.rate = 1.05; u2.pitch = 1.1; u2.lang = 'en-US';
+            let enVoice = getEnVoice();
+            if (enVoice) u2.voice = enVoice;
+            
+            // 두 번째 영어가 끝났을 때만 resolve 처리
+            u2.onend = resolve; u2.onerror = resolve; 
+            
+            window.__tts_queue.push(u1); window.__tts_queue.push(u2);
+            window.speechSynthesis.speak(u1); window.speechSynthesis.speak(u2);
         }
-        
-        u.onend = resolve; u.onerror = resolve; window.__tts_queue.push(u); window.speechSynthesis.speak(u);
     });
 }
 
@@ -1029,9 +1043,6 @@ function stopLadderBGM() {
     }
 }
 
-// ----------------------------------
-// LADDER LOGIC
-// ----------------------------------
 function setupLadder() {
     playUISound('click');
     
@@ -1311,9 +1322,6 @@ function startLadderAnimation() {
     animReq = requestAnimationFrame(drawFrame);
 }
 
-// ----------------------------------
-// ROULETTE LOGIC
-// ----------------------------------
 function setupRoulette() {
     playUISound('click');
     if(animReq) { cancelAnimationFrame(animReq); animReq = null; }
